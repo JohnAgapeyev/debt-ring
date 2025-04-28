@@ -25,13 +25,17 @@ impl Drop for Ring {
     }
 }
 
+pub fn get_sqe(ring: &mut io_uring) -> Option<&mut io_uring_sqe> {
+    unsafe { io_uring_get_sqe(ring).as_mut() }
+}
+
 fn main() {
     unsafe {
         let mut ring = Ring::new(32, 0).unwrap();
 
         let mut magic: i32 = 17;
 
-        let sqe = io_uring_get_sqe(&mut ring.inner);
+        let sqe = get_sqe(&mut ring.inner).unwrap();
 
         io_uring_sqe_set_data(sqe, &mut magic as *mut _ as *mut c_void);
 
