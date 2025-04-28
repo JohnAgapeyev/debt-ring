@@ -13,7 +13,7 @@ fn main() {
         .iter()
         .map(|path| {
             let mut header_path = path.clone();
-            header_path.push("liburing/io_uring.h");
+            header_path.push("liburing.h");
             header_path
         })
         .find(|path| {

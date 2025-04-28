@@ -6,3 +6,6 @@ edition = "2021"
 [build-dependencies]
 bindgen.workspace = true
 pkg-config.workspace = true
+
+[dependencies]
+

@@ -66,6 +66,9 @@ dependencies = [
 [[package]]
 name = "debt-ring"
 version = "0.1.0"
+dependencies = [
+ "liburing-sys",
+]
 
 [[package]]
 name = "either"
