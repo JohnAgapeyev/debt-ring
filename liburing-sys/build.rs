@@ -25,15 +25,23 @@ fn main() {
         .into_string()
         .expect("Found header path is not a valid UTF-8 string!");
 
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("Could not find OUT_DIR in env"));
+
     let bindings = bindgen::Builder::default()
         .rust_edition(bindgen::RustEdition::Edition2021)
         .header(header_path)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .wrap_static_fns(true)
+        .wrap_static_fns_path(out_dir.join("wrap_static_fns"))
         .generate()
         .expect("Unable to generate bindings");
 
-    let out_path = PathBuf::from(env::var("OUT_DIR").expect("Could not find OUT_DIR in env"));
     bindings
-        .write_to_file(out_path.join("bindings.rs"))
+        .write_to_file(out_dir.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+
+    cc::Build::new()
+        .file(out_dir.join("wrap_static_fns.c"))
+        .flag_if_supported("-flto=thin")
+        .compile("wrap_static_fns");
 }
