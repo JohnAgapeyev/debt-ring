@@ -26,6 +26,7 @@ fn main() {
         .expect("Found header path is not a valid UTF-8 string!");
 
     let bindings = bindgen::Builder::default()
+        .rust_edition(bindgen::RustEdition::Edition2024)
         .header(header_path)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
