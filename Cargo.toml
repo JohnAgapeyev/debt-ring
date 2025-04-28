@@ -1,8 +1,20 @@
+[workspace]
+members = [
+    "liburing-sys",
+]
+
+[profile.release]
+strip = true
+lto = "thin"
+
 [package]
 name = "debt-ring"
 version = "0.1.0"
 edition = "2024"
 
-[build-dependencies]
+[workspace.dependencies]
 bindgen = "0.71.1"
 pkg-config = "0.3.32"
+liburing-sys = {path = "../liburing-sys" }
+
+[dependencies]

@@ -66,10 +66,6 @@ dependencies = [
 [[package]]
 name = "debt-ring"
 version = "0.1.0"
-dependencies = [
- "bindgen",
- "pkg-config",
-]
 
 [[package]]
 name = "either"
@@ -106,6 +102,14 @@ checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
  "windows-targets",
+]
+
+[[package]]
+name = "liburing-sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "pkg-config",
 ]
 
 [[package]]
