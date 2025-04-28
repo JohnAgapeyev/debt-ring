@@ -1,5 +1,11 @@
 use std::ffi::c_void;
 use std::io::Error;
+use std::os::fd::AsRawFd;
+use std::time::{Duration, Instant};
+
+use nix::sys::socket::{
+    AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrLike, socket,
+};
 
 use liburing_sys::*;
 
@@ -35,11 +41,42 @@ fn main() {
 
         let mut magic: i32 = 17;
 
-        let sqe = get_sqe(&mut ring.inner).unwrap();
+        let now = Instant::now();
 
-        io_uring_sqe_set_data(sqe, &mut magic as *mut _ as *mut c_void);
+        let connect_sqe = get_sqe(&mut ring.inner).unwrap();
 
-        io_uring_prep_nop(sqe);
+        io_uring_sqe_set_data(connect_sqe, &mut magic as *mut _ as *mut c_void);
+
+        let sock = socket(
+            AddressFamily::Inet,
+            SockType::Stream,
+            SockFlag::SOCK_NONBLOCK,
+            SockProtocol::Tcp,
+        )
+        .unwrap();
+
+        let addr = SockaddrIn::new(127, 0, 0, 1, 8080);
+
+        io_uring_prep_connect(
+            connect_sqe,
+            sock.as_raw_fd(),
+            addr.as_ptr() as *const liburing_sys::sockaddr,
+            addr.len(),
+        );
+
+        let send_sqe = get_sqe(&mut ring.inner).unwrap();
+
+        io_uring_sqe_set_data(send_sqe, &mut magic as *mut _ as *mut c_void);
+
+        let msg = "Hello io_uring world!\n";
+
+        io_uring_prep_send(
+            send_sqe,
+            sock.as_raw_fd(),
+            msg.as_bytes().as_ptr() as *const c_void,
+            msg.len(),
+            0,
+        );
 
         let submitted = io_uring_submit(&mut ring.inner);
         println!("Submitted {submitted} entries");
@@ -53,6 +90,8 @@ fn main() {
 
         let raw = io_uring_cqe_get_data(cqe);
         assert!(!raw.is_null());
+
+        println!("Time taken was: {}", now.elapsed().as_micros());
 
         println!("My magic value is: {}", *(raw as *mut i32));
     };
