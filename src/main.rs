@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 use std::io::Error;
 use std::os::fd::AsRawFd;
+use std::str::FromStr;
 use std::time::Instant;
 
 use nix::sys::socket::{
@@ -74,7 +75,7 @@ fn main() {
         )
         .unwrap();
 
-        let addr = SockaddrIn::new(127, 0, 0, 1, cli.port);
+        let addr = SockaddrIn::from_str(&format!("{}:{}", cli.host, cli.port)).unwrap();
 
         io_uring_prep_connect(
             connect_sqe,
