@@ -123,7 +123,7 @@ fn client(host: String, port: u16) {
             io_uring_prep_recv(
                 recv_sqe,
                 sock.as_raw_fd(),
-                buf.as_ptr() as *mut c_void,
+                buf.as_mut_ptr() as *mut c_void,
                 msg.len(),
                 0,
             );
@@ -263,7 +263,7 @@ fn server(host: String, port: u16) {
             io_uring_prep_recv(
                 recv_sqe,
                 sock.as_raw_fd(),
-                buf.as_ptr() as *mut c_void,
+                buf.as_mut_ptr() as *mut c_void,
                 msg.len(),
                 0,
             );
