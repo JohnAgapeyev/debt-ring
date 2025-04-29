@@ -84,6 +84,8 @@ fn client(host: String, port: u16) {
 
         let mut count = 0usize;
 
+        let mut buf = [0u8; 4096];
+
         loop {
             let now = Instant::now();
             count += 1;
@@ -98,6 +100,30 @@ fn client(host: String, port: u16) {
                 send_sqe,
                 sock.as_raw_fd(),
                 msg.as_bytes().as_ptr() as *const c_void,
+                msg.len(),
+                0,
+            );
+
+            let _ = io_uring_submit(&mut ring.inner);
+
+            let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
+
+            let res = io_uring_wait_cqe(&mut ring.inner, &mut cqe);
+            assert!(res == 0);
+
+            let raw = io_uring_cqe_get_data(cqe);
+            assert!(!raw.is_null());
+
+            let recv_sqe = get_sqe(&mut ring.inner).unwrap();
+
+            io_uring_sqe_set_data(recv_sqe, &mut magic as *mut _ as *mut c_void);
+
+            let msg = "Hello io_uring world!\n";
+
+            io_uring_prep_recv(
+                recv_sqe,
+                sock.as_raw_fd(),
+                buf.as_ptr() as *mut c_void,
                 msg.len(),
                 0,
             );
@@ -196,6 +222,8 @@ fn server(host: String, port: u16) {
 
         io_uring_cqe_seen(&mut ring.inner, cqe);
 
+        let mut buf = [0u8; 4096];
+
         let mut count = 0usize;
 
         loop {
@@ -212,6 +240,30 @@ fn server(host: String, port: u16) {
                 send_sqe,
                 accepted_sock,
                 msg.as_bytes().as_ptr() as *const c_void,
+                msg.len(),
+                0,
+            );
+
+            let _ = io_uring_submit(&mut ring.inner);
+
+            let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
+
+            let res = io_uring_wait_cqe(&mut ring.inner, &mut cqe);
+            assert!(res == 0);
+
+            let raw = io_uring_cqe_get_data(cqe);
+            assert!(!raw.is_null());
+
+            let recv_sqe = get_sqe(&mut ring.inner).unwrap();
+
+            io_uring_sqe_set_data(recv_sqe, &mut magic as *mut _ as *mut c_void);
+
+            let msg = "Hello io_uring world!\n";
+
+            io_uring_prep_recv(
+                recv_sqe,
+                sock.as_raw_fd(),
+                buf.as_ptr() as *mut c_void,
                 msg.len(),
                 0,
             );
