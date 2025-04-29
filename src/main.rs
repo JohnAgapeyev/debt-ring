@@ -1,11 +1,13 @@
 use std::ffi::c_void;
 use std::io::Error;
 use std::os::fd::AsRawFd;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use nix::sys::socket::{
     AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrLike, socket,
 };
+
+use clap::Parser;
 
 use liburing_sys::*;
 
@@ -35,7 +37,24 @@ pub fn get_sqe(ring: &mut io_uring) -> Option<&mut io_uring_sqe> {
     unsafe { io_uring_get_sqe(ring).as_mut() }
 }
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    listen: bool,
+    host: String,
+    #[arg(value_parser = clap::value_parser!(u16).range(1..))]
+    port: u16,
+}
+
 fn main() {
+    let cli = Cli::parse();
+
+    if cli.listen {
+        println!("We don't currently support server listening mode!");
+        return;
+    }
+
     unsafe {
         let mut ring = Ring::new(32, 0).unwrap();
 
@@ -55,7 +74,7 @@ fn main() {
         )
         .unwrap();
 
-        let addr = SockaddrIn::new(127, 0, 0, 1, 8080);
+        let addr = SockaddrIn::new(127, 0, 0, 1, cli.port);
 
         io_uring_prep_connect(
             connect_sqe,
