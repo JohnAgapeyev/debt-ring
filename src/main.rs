@@ -14,14 +14,40 @@ use liburing_sys::*;
 
 struct Ring {
     pub inner: io_uring,
+    pub cq_buf: Vec<*mut io_uring_cqe>,
 }
 
 impl Ring {
     pub fn new(entries: u32, flags: u32) -> Result<Ring, Error> {
+        let cq_buf = Vec::with_capacity(entries as usize);
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
             match io_uring_queue_init(entries, &mut ring, flags) {
-                0 => Ok(Ring { inner: ring }),
+                0 => Ok(Ring {
+                    inner: ring,
+                    cq_buf,
+                }),
+                err => Err(Error::from_raw_os_error(-err)),
+            }
+        }
+    }
+    pub fn get_sqe<T>(&mut self, user_data: *mut T) -> Option<&mut io_uring_sqe> {
+        unsafe {
+            let sqe = io_uring_get_sqe(&mut self.inner).as_mut()?;
+            io_uring_sqe_set_data(sqe, user_data as *mut c_void);
+            Some(sqe)
+        }
+    }
+    pub fn submit(&mut self) -> Result<i32, Error> {
+        /*
+         * If SQPOLL is used, the return value may report a higher number of submitted entries
+         * than actually submitted. If the user requires accurate information about how many
+         * submission queue entries have been successfully submitted, while using SQPOLL,
+         * the user must fall back to repeatedly submitting a single submission queue entry.
+         */
+        unsafe {
+            match io_uring_submit(&mut self.inner) {
+                n if n >= 0 => Ok(n),
                 err => Err(Error::from_raw_os_error(-err)),
             }
         }
@@ -32,10 +58,6 @@ impl Drop for Ring {
     fn drop(&mut self) {
         unsafe { io_uring_queue_exit(&mut self.inner) }
     }
-}
-
-pub fn get_sqe(ring: &mut io_uring) -> Option<&mut io_uring_sqe> {
-    unsafe { io_uring_get_sqe(ring).as_mut() }
 }
 
 #[derive(Parser)]
@@ -54,9 +76,7 @@ fn client(host: String, port: u16) {
 
         let mut magic: i32 = 17;
 
-        let connect_sqe = get_sqe(&mut ring.inner).unwrap();
-
-        io_uring_sqe_set_data(connect_sqe, &mut magic as *mut _ as *mut c_void);
+        let connect_sqe = ring.get_sqe(&mut magic).unwrap();
 
         let sock = socket(
             AddressFamily::Inet,
@@ -75,7 +95,7 @@ fn client(host: String, port: u16) {
             addr.len(),
         );
 
-        let _ = io_uring_submit(&mut ring.inner);
+        ring.submit().unwrap();
 
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -90,9 +110,7 @@ fn client(host: String, port: u16) {
             let now = Instant::now();
             count += 1;
 
-            let send_sqe = get_sqe(&mut ring.inner).unwrap();
-
-            io_uring_sqe_set_data(send_sqe, &mut magic as *mut _ as *mut c_void);
+            let send_sqe = ring.get_sqe(&mut magic).unwrap();
 
             let msg = "Hello io_uring world!\n";
 
@@ -104,7 +122,7 @@ fn client(host: String, port: u16) {
                 0,
             );
 
-            let _ = io_uring_submit(&mut ring.inner);
+            ring.submit().unwrap();
 
             let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -114,9 +132,7 @@ fn client(host: String, port: u16) {
             let raw = io_uring_cqe_get_data(cqe);
             assert!(!raw.is_null());
 
-            let recv_sqe = get_sqe(&mut ring.inner).unwrap();
-
-            io_uring_sqe_set_data(recv_sqe, &mut magic as *mut _ as *mut c_void);
+            let recv_sqe = ring.get_sqe(&mut magic).unwrap();
 
             let msg = "Hello io_uring world!\n";
 
@@ -128,7 +144,7 @@ fn client(host: String, port: u16) {
                 0,
             );
 
-            let _ = io_uring_submit(&mut ring.inner);
+            ring.submit().unwrap();
 
             let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -153,8 +169,7 @@ fn server(host: String, port: u16) {
 
         let mut magic: i32 = 17;
 
-        let bind_sqe = get_sqe(&mut ring.inner).unwrap();
-        io_uring_sqe_set_data(bind_sqe, &mut magic as *mut _ as *mut c_void);
+        let bind_sqe = ring.get_sqe(&mut magic).unwrap();
 
         let sock = socket(
             AddressFamily::Inet,
@@ -173,7 +188,7 @@ fn server(host: String, port: u16) {
             addr.len(),
         );
 
-        let _ = io_uring_submit(&mut ring.inner);
+        ring.submit().unwrap();
 
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -182,12 +197,11 @@ fn server(host: String, port: u16) {
 
         io_uring_cqe_seen(&mut ring.inner, cqe);
 
-        let listen_sqe = get_sqe(&mut ring.inner).unwrap();
-        io_uring_sqe_set_data(listen_sqe, &mut magic as *mut _ as *mut c_void);
+        let listen_sqe = ring.get_sqe(&mut magic).unwrap();
 
         io_uring_prep_listen(listen_sqe, sock.as_raw_fd(), 32);
 
-        let _ = io_uring_submit(&mut ring.inner);
+        ring.submit().unwrap();
 
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -196,8 +210,7 @@ fn server(host: String, port: u16) {
 
         io_uring_cqe_seen(&mut ring.inner, cqe);
 
-        let accept_sqe = get_sqe(&mut ring.inner).unwrap();
-        io_uring_sqe_set_data(accept_sqe, &mut magic as *mut _ as *mut c_void);
+        let accept_sqe = ring.get_sqe(&mut magic).unwrap();
 
         io_uring_prep_accept(
             accept_sqe,
@@ -207,7 +220,7 @@ fn server(host: String, port: u16) {
             SockFlag::SOCK_NONBLOCK.bits(),
         );
 
-        let _ = io_uring_submit(&mut ring.inner);
+        ring.submit().unwrap();
 
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -230,9 +243,7 @@ fn server(host: String, port: u16) {
             let now = Instant::now();
             count += 1;
 
-            let send_sqe = get_sqe(&mut ring.inner).unwrap();
-
-            io_uring_sqe_set_data(send_sqe, &mut magic as *mut _ as *mut c_void);
+            let send_sqe = ring.get_sqe(&mut magic).unwrap();
 
             let msg = "Hello io_uring world!\n";
 
@@ -244,7 +255,7 @@ fn server(host: String, port: u16) {
                 0,
             );
 
-            let _ = io_uring_submit(&mut ring.inner);
+            ring.submit().unwrap();
 
             let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
@@ -254,9 +265,7 @@ fn server(host: String, port: u16) {
             let raw = io_uring_cqe_get_data(cqe);
             assert!(!raw.is_null());
 
-            let recv_sqe = get_sqe(&mut ring.inner).unwrap();
-
-            io_uring_sqe_set_data(recv_sqe, &mut magic as *mut _ as *mut c_void);
+            let recv_sqe = ring.get_sqe(&mut magic).unwrap();
 
             let msg = "Hello io_uring world!\n";
 
@@ -268,7 +277,7 @@ fn server(host: String, port: u16) {
                 0,
             );
 
-            let _ = io_uring_submit(&mut ring.inner);
+            ring.submit().unwrap();
 
             let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
