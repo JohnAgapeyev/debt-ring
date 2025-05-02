@@ -20,6 +20,7 @@ use liburing_sys::*;
 
 thread_local! {
     static NEXT_TASK_ID: Cell<u64> = const { Cell::new(1u64) };
+    static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new(32, 0).unwrap());
 }
 
 pub fn get_next_task_id() -> u64 {
@@ -54,6 +55,11 @@ impl Future for SqeFuture {
             } else {
                 shared.waker = Some(cx.waker().clone());
             }
+
+            EXECUTOR.with_borrow_mut(|exec| {
+                exec.register_task(shared.task_id, shared.waker.clone().unwrap());
+            });
+
             return Poll::Pending;
         }
         Poll::Ready(StrippedCqe { res: 0, flags: 0 })
@@ -75,20 +81,17 @@ impl SqeFuture {
 struct Ring {
     pub inner: io_uring,
     pub cq_buf: Vec<*mut io_uring_cqe>,
-    pub task_map: HashMap<u64, SqeFuture>,
 }
 
 impl Ring {
-    pub fn new(entries: u32, flags: u32) -> Result<Ring, Error> {
+    pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
         let cq_buf = Vec::with_capacity(entries as usize);
-        let task_map = HashMap::with_capacity(entries as usize);
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
             match io_uring_queue_init(entries, &mut ring, flags) {
                 0 => Ok(Ring {
                     inner: ring,
                     cq_buf,
-                    task_map,
                 }),
                 err => Err(Error::from_raw_os_error(-err)),
             }
@@ -121,6 +124,25 @@ impl Ring {
 impl Drop for Ring {
     fn drop(&mut self) {
         unsafe { io_uring_queue_exit(&mut self.inner) }
+    }
+}
+
+struct Executor {
+    ring: Ring,
+    task_map: HashMap<u64, Waker>,
+}
+
+impl Executor {
+    pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
+        let ring = Ring::new(entries, flags)?;
+        let task_map = HashMap::with_capacity(entries as usize);
+        Ok(Executor { ring, task_map })
+    }
+    pub fn register_task(&mut self, task_id: u64, wake: Waker) {
+        self.task_map.insert(task_id, wake);
+    }
+    pub fn run(&mut self) {
+        //TBD
     }
 }
 
