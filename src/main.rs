@@ -1,8 +1,13 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::future::Future;
 use std::io::Error;
 use std::os::fd::AsRawFd;
+use std::pin::Pin;
+use std::rc::Rc;
 use std::str::FromStr;
+use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
 use nix::sys::socket::{
@@ -14,7 +19,7 @@ use clap::Parser;
 use liburing_sys::*;
 
 thread_local! {
-    static NEXT_TASK_ID: Cell<u64> = Cell::new(1u64.into());
+    static NEXT_TASK_ID: Cell<u64> = const { Cell::new(1u64) };
 }
 
 pub fn get_next_task_id() -> u64 {
@@ -23,20 +28,67 @@ pub fn get_next_task_id() -> u64 {
     out_id
 }
 
+struct SqeFuture {
+    shared: Rc<RefCell<SqeFutureShared>>,
+}
+
+struct SqeFutureShared {
+    pub task_id: u64,
+    pub waker: Option<Waker>,
+    pub pending: bool,
+}
+
+//Same as an io_uring_cqe just without the user_data field
+struct StrippedCqe {
+    pub res: i32,
+    pub flags: u32,
+}
+
+impl Future for SqeFuture {
+    type Output = StrippedCqe;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut shared = self.shared.borrow_mut();
+        if shared.pending {
+            if let Some(wake) = &mut shared.waker {
+                wake.clone_from(cx.waker());
+            } else {
+                shared.waker = Some(cx.waker().clone());
+            }
+            return Poll::Pending;
+        }
+        Poll::Ready(StrippedCqe { res: 0, flags: 0 })
+    }
+}
+
+impl SqeFuture {
+    fn new() -> SqeFuture {
+        SqeFuture {
+            shared: Rc::new(RefCell::new(SqeFutureShared {
+                task_id: get_next_task_id(),
+                waker: None,
+                pending: true,
+            })),
+        }
+    }
+}
+
 struct Ring {
     pub inner: io_uring,
     pub cq_buf: Vec<*mut io_uring_cqe>,
+    pub task_map: HashMap<u64, SqeFuture>,
 }
 
 impl Ring {
     pub fn new(entries: u32, flags: u32) -> Result<Ring, Error> {
         let cq_buf = Vec::with_capacity(entries as usize);
+        let task_map = HashMap::with_capacity(entries as usize);
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
             match io_uring_queue_init(entries, &mut ring, flags) {
                 0 => Ok(Ring {
                     inner: ring,
                     cq_buf,
+                    task_map,
                 }),
                 err => Err(Error::from_raw_os_error(-err)),
             }
