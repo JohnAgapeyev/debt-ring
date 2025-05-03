@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 
@@ -185,16 +185,32 @@ impl Executor {
             .expect("too many tasks queued");
     }
     pub fn run(&mut self) {
-        while let Ok(task) = self.work_queue.recv() {
-            let mut future_slot = task.future.lock().unwrap();
-            if let Some(mut future) = future_slot.take() {
-                let waker = Waker::from(task.clone());
-                let context = &mut Context::from_waker(&waker);
-                if future.as_mut().poll(context).is_pending() {
-                    // We're not done processing the future, so put it
-                    // back in its task to be run again in the future.
-                    *future_slot = Some(future);
+        loop {
+            let recv_task = match self.work_queue.try_recv() {
+                Ok(t) => Some(t),
+                Err(TryRecvError::Empty) => None,
+                //Don't continue the event loop if we're shutting down
+                Err(TryRecvError::Disconnected) => {
+                    println!("Sender was disconnected!");
+                    return;
                 }
+            };
+
+            if let Some(task) = recv_task {
+                let mut future_slot = task.future.lock().unwrap();
+                if let Some(mut future) = future_slot.take() {
+                    let waker = Waker::from(task.clone());
+                    let context = &mut Context::from_waker(&waker);
+                    if future.as_mut().poll(context).is_pending() {
+                        // We're not done processing the future, so put it
+                        // back in its task to be run again in the future.
+                        *future_slot = Some(future);
+                    }
+                }
+            } else {
+                //No work in the queue to be done
+                println!("No work in the queue!");
+                break;
             }
         }
     }
