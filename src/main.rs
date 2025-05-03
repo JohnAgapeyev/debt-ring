@@ -102,12 +102,20 @@ impl Ring {
             }
         }
     }
-    pub fn get_sqe(&mut self) -> Option<&mut io_uring_sqe> {
+    pub fn get_sqe(&mut self) -> &mut io_uring_sqe {
         unsafe {
-            let sqe = io_uring_get_sqe(&mut self.inner).as_mut()?;
-            let task_id = get_next_task_id();
-            io_uring_sqe_set_data64(sqe, task_id);
-            Some(sqe)
+            match io_uring_get_sqe(&mut self.inner).as_mut() {
+                Some(sqe) => {
+                    let task_id = get_next_task_id();
+                    io_uring_sqe_set_data64(sqe, task_id);
+                    sqe
+                }
+                None => {
+                    self.submit()
+                        .expect("io_uring_submit() failed after NULL SQE");
+                    self.get_sqe()
+                }
+            }
         }
     }
     pub fn submit(&mut self) -> Result<i32, Error> {
@@ -210,6 +218,15 @@ impl Executor {
             } else {
                 //No work in the queue to be done
                 println!("No work in the queue!");
+
+                unsafe {
+                    let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
+                    let res = io_uring_wait_cqe(&mut self.ring.inner, &mut cqe);
+                    if !cqe.is_null() {
+                        //Got a CQE to process
+                    }
+                }
+
                 break;
             }
         }
@@ -230,7 +247,7 @@ fn client(host: String, port: u16) {
     unsafe {
         let mut ring = Ring::new(32, 0).unwrap();
 
-        let connect_sqe = ring.get_sqe().unwrap();
+        let connect_sqe = ring.get_sqe();
 
         let sock = socket(
             AddressFamily::Inet,
@@ -264,7 +281,7 @@ fn client(host: String, port: u16) {
             let now = Instant::now();
             count += 1;
 
-            let send_sqe = ring.get_sqe().unwrap();
+            let send_sqe = ring.get_sqe();
 
             let msg = "Hello io_uring world!\n";
 
@@ -286,7 +303,7 @@ fn client(host: String, port: u16) {
             let raw = io_uring_cqe_get_data(cqe);
             assert!(!raw.is_null());
 
-            let recv_sqe = ring.get_sqe().unwrap();
+            let recv_sqe = ring.get_sqe();
 
             let msg = "Hello io_uring world!\n";
 
@@ -321,7 +338,7 @@ fn server(host: String, port: u16) {
     unsafe {
         let mut ring = Ring::new(32, 0).unwrap();
 
-        let bind_sqe = ring.get_sqe().unwrap();
+        let bind_sqe = ring.get_sqe();
 
         let sock = socket(
             AddressFamily::Inet,
@@ -349,7 +366,7 @@ fn server(host: String, port: u16) {
 
         io_uring_cqe_seen(&mut ring.inner, cqe);
 
-        let listen_sqe = ring.get_sqe().unwrap();
+        let listen_sqe = ring.get_sqe();
 
         io_uring_prep_listen(listen_sqe, sock.as_raw_fd(), 32);
 
@@ -362,7 +379,7 @@ fn server(host: String, port: u16) {
 
         io_uring_cqe_seen(&mut ring.inner, cqe);
 
-        let accept_sqe = ring.get_sqe().unwrap();
+        let accept_sqe = ring.get_sqe();
 
         io_uring_prep_accept(
             accept_sqe,
@@ -395,7 +412,7 @@ fn server(host: String, port: u16) {
             let now = Instant::now();
             count += 1;
 
-            let send_sqe = ring.get_sqe().unwrap();
+            let send_sqe = ring.get_sqe();
 
             let msg = "Hello io_uring world!\n";
 
@@ -417,7 +434,7 @@ fn server(host: String, port: u16) {
             let raw = io_uring_cqe_get_data(cqe);
             assert!(!raw.is_null());
 
-            let recv_sqe = ring.get_sqe().unwrap();
+            let recv_sqe = ring.get_sqe();
 
             let msg = "Hello io_uring world!\n";
 
