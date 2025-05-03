@@ -1,3 +1,4 @@
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -152,7 +153,8 @@ struct Executor {
     ring: Ring,
     task_map: HashMap<u64, Waker>,
     work_queue: Receiver<Arc<Task>>,
-    task_sender: Sender<Arc<Task>>,
+    //Horrible hack to allow dropping the sender to ensure we see the end of stream on the channel
+    pub task_sender: Option<Sender<Arc<Task>>>,
 }
 
 impl Executor {
@@ -164,11 +166,23 @@ impl Executor {
             ring,
             task_map,
             work_queue,
-            task_sender,
+            task_sender: Some(task_sender),
         })
     }
     pub fn register_task(&mut self, task_id: u64, wake: Waker) {
         self.task_map.insert(task_id, wake);
+    }
+    pub fn spawn(&self, future: impl Future<Output = ()> + 'static + Send) {
+        let future = future.boxed();
+        let task = Arc::new(Task {
+            future: Mutex::new(Some(future)),
+            task_sender: self.task_sender.clone().unwrap(),
+        });
+        self.task_sender
+            .as_ref()
+            .unwrap()
+            .send(task)
+            .expect("too many tasks queued");
     }
     pub fn run(&mut self) {
         while let Ok(task) = self.work_queue.recv() {
@@ -419,6 +433,18 @@ fn server(host: String, port: u16) {
 }
 
 fn main() {
+    EXECUTOR.with_borrow_mut(|exec| {
+        exec.spawn(async {
+            println!("I am an async function!");
+        });
+
+        exec.task_sender = None;
+
+        exec.run();
+    });
+
+    return;
+
     let cli = Cli::parse();
 
     if cli.listen {
