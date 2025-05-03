@@ -1,3 +1,4 @@
+use futures::future::BoxFuture;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -7,7 +8,10 @@ use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::task::{Context, Poll, Waker};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 
 use nix::sys::socket::{
@@ -127,22 +131,58 @@ impl Drop for Ring {
     }
 }
 
+struct Task {
+    future: Mutex<Option<BoxFuture<'static, ()>>>,
+
+    /// Handle to place the task itself back onto the task queue.
+    task_sender: Sender<Arc<Self>>,
+}
+
+impl Wake for Task {
+    fn wake(self: Arc<Self>) {
+        let cloned = self.clone();
+        //Wake up the task by pushing it to the work queue using the local sender handle
+        self.task_sender
+            .send(cloned)
+            .expect("too many tasks queued");
+    }
+}
+
 struct Executor {
     ring: Ring,
     task_map: HashMap<u64, Waker>,
+    work_queue: Receiver<Arc<Task>>,
+    task_sender: Sender<Arc<Task>>,
 }
 
 impl Executor {
     pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
         let ring = Ring::new(entries, flags)?;
         let task_map = HashMap::with_capacity(entries as usize);
-        Ok(Executor { ring, task_map })
+        let (task_sender, work_queue) = channel();
+        Ok(Executor {
+            ring,
+            task_map,
+            work_queue,
+            task_sender,
+        })
     }
     pub fn register_task(&mut self, task_id: u64, wake: Waker) {
         self.task_map.insert(task_id, wake);
     }
     pub fn run(&mut self) {
-        //TBD
+        while let Ok(task) = self.work_queue.recv() {
+            let mut future_slot = task.future.lock().unwrap();
+            if let Some(mut future) = future_slot.take() {
+                let waker = Waker::from(task.clone());
+                let context = &mut Context::from_waker(&waker);
+                if future.as_mut().poll(context).is_pending() {
+                    // We're not done processing the future, so put it
+                    // back in its task to be run again in the future.
+                    *future_slot = Some(future);
+                }
+            }
+        }
     }
 }
 
