@@ -76,6 +76,19 @@ struct SqeFutureShared {
     pub completed: bool,
 }
 
+/*
+ * SQE operation requirements:
+ *  - Needs a reference to the Ring to be able to be fetched
+ *  - Once fetched, it is considered "alive" as far as submitting events go
+ *  - Seems like default zeroed version is same as the no-op, but don't want to rely on that
+ *  - You call an io_uring_prep_* function to set up the SQE per-operation
+ *  - You only want to call the prep function once on a single SQE
+ *  - I want a single interface for handling the N different possible prep/operations here
+ *  - I want to minimize boilerplate of making N newtypes to boot
+ *  - The io_uring_prep_* functions have different args, so traits don't work nicely
+ *  - I don't want to allow SQEs to be created without calling a prep function on them
+ */
+
 impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
