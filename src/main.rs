@@ -29,14 +29,14 @@ thread_local! {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-struct Task(u64);
+pub struct Task(u64);
 
 impl Wake for Task {
     fn wake(self: Arc<Self>) {
         let cloned = self.clone();
 
-        EXECUTOR.with_borrow_mut(move |exec| {
-            exec.clone().borrow_mut().wake(*cloned);
+        EXECUTOR.with_borrow(move |exec| {
+            exec.clone().borrow().wake(*cloned);
         });
     }
 }
@@ -55,9 +55,8 @@ struct SqeFuture {
 }
 
 struct SqeFutureShared {
-    pub task_id: Task,
     pub waker: Option<Waker>,
-    pub pending: bool,
+    pub completed: bool,
 }
 
 //Same as an io_uring_cqe just without the user_data field
@@ -70,17 +69,25 @@ impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut shared = self.shared.borrow_mut();
-        if shared.pending {
+        println!("Future polled!");
+        if !shared.completed {
             if let Some(wake) = &mut shared.waker {
                 wake.clone_from(cx.waker());
             } else {
                 shared.waker = Some(cx.waker().clone());
             }
 
-            EXECUTOR.with_borrow_mut(move |exec| {
-                exec.clone()
-                    .borrow_mut()
-                    .register_task(shared.task_id, shared.waker.clone().unwrap());
+            let shared_copy = self.shared.clone();
+
+            EXECUTOR.with_borrow(move |exec| {
+                let binding = exec.borrow();
+                let sqe = binding.get_sqe();
+                binding.register_task(Task(sqe.user_data), shared_copy);
+                unsafe {
+                    //io_uring_prep_nop(exec.borrow().get_sqe());
+                    io_uring_prep_nop(sqe);
+                }
+                exec.borrow().submit().unwrap();
             });
 
             return Poll::Pending;
@@ -93,9 +100,8 @@ impl SqeFuture {
     fn new() -> SqeFuture {
         SqeFuture {
             shared: Rc::new(RefCell::new(SqeFutureShared {
-                task_id: get_next_task_id(),
                 waker: None,
-                pending: true,
+                completed: false,
             })),
         }
     }
@@ -162,7 +168,7 @@ impl Drop for Ring {
 struct Executor {
     ring: Ring,
 
-    task_map: HashMap<u64, Waker>,
+    task_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
     future_map: RefCell<HashMap<u64, LocalBoxFuture<'static, ()>>>,
 
     work_queue: Receiver<Arc<Task>>,
@@ -175,7 +181,7 @@ struct Executor {
 impl Executor {
     pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
         let ring = Ring::new(entries, flags)?;
-        let task_map = HashMap::with_capacity(entries as usize);
+        let task_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let future_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let task_queue = RefCell::new(VecDeque::with_capacity(entries as usize));
         let (task_sender, work_queue) = channel();
@@ -188,10 +194,10 @@ impl Executor {
             task_queue,
         })
     }
-    pub fn register_task(&mut self, task: Task, wake: Waker) {
-        self.task_map.insert(task.0, wake);
+    pub fn register_task(&self, task: Task, sqe: Rc<RefCell<SqeFutureShared>>) {
+        self.task_map.borrow_mut().insert(task.0, sqe);
     }
-    pub fn wake(&mut self, task: Task) {
+    pub fn wake(&self, task: Task) {
         self.task_queue.borrow_mut().push_back(task.0);
     }
     pub fn get_sqe(&self) -> &mut io_uring_sqe {
@@ -231,6 +237,24 @@ impl Executor {
                 if !cqe.is_null() {
                     //Got a CQE to process
                     println!("Got a CQE: {:#?}", *cqe);
+
+                    let task_id = io_uring_cqe_get_data64(cqe);
+
+                    println!("Waking task: {:#?}", task_id);
+
+                    let task_map_binding = self.task_map.borrow();
+
+                    let task = task_map_binding
+                        .get(&task_id)
+                        .expect("CQE user_data doesn't exist in the task map!");
+
+                    task.borrow_mut().completed = true;
+                    task.borrow_mut()
+                        .waker
+                        .as_ref()
+                        .expect("Got a completed task with no waker!")
+                        .wake_by_ref();
+
                     io_uring_cqe_seen(self.ring.inner.as_ptr(), cqe);
                 } else {
                     println!("No more CQEs");
@@ -484,21 +508,19 @@ fn main() {
     //    inner.borrow_mut().submit().unwrap();
     //});
 
-    EXECUTOR.with_borrow_mut(move |exec| {
+    EXECUTOR.with_borrow(move |exec| {
         let inner = exec.clone();
         exec.clone().borrow().spawn(async move {
             println!("I am an async function!");
 
-            unsafe {
-                io_uring_prep_nop(inner.clone().borrow().get_sqe());
-                io_uring_prep_nop(inner.clone().borrow().get_sqe());
-                io_uring_prep_nop(inner.clone().borrow().get_sqe());
-                io_uring_prep_nop(inner.clone().borrow().get_sqe());
-                io_uring_prep_nop(inner.clone().borrow().get_sqe());
-            }
+            let nop = SqeFuture::new();
+
+            nop.await;
+
             inner.borrow().submit().unwrap();
         });
         //exec.task_sender = None;
+        exec.clone().borrow().run();
         exec.clone().borrow().run();
     });
 
