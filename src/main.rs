@@ -54,15 +54,26 @@ struct SqeFuture {
     shared: Rc<RefCell<SqeFutureShared>>,
 }
 
-struct SqeFutureShared {
-    pub waker: Option<Waker>,
-    pub completed: bool,
-}
-
 //Same as an io_uring_cqe just without the user_data field
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct StrippedCqe {
     pub res: i32,
     pub flags: u32,
+}
+
+impl From<&io_uring_cqe> for StrippedCqe {
+    fn from(cqe: &io_uring_cqe) -> Self {
+        Self {
+            res: cqe.res,
+            flags: cqe.flags,
+        }
+    }
+}
+
+struct SqeFutureShared {
+    pub waker: Option<Waker>,
+    pub cqe: Option<StrippedCqe>,
+    pub completed: bool,
 }
 
 impl Future for SqeFuture {
@@ -84,7 +95,6 @@ impl Future for SqeFuture {
                 let sqe = binding.get_sqe();
                 binding.register_task(Task(sqe.user_data), shared_copy);
                 unsafe {
-                    //io_uring_prep_nop(exec.borrow().get_sqe());
                     io_uring_prep_nop(sqe);
                 }
                 exec.borrow().submit().unwrap();
@@ -92,7 +102,11 @@ impl Future for SqeFuture {
 
             return Poll::Pending;
         }
-        Poll::Ready(StrippedCqe { res: 0, flags: 0 })
+        Poll::Ready(
+            shared
+                .cqe
+                .expect("Future was ready without a CQE result stored!"),
+        )
     }
 }
 
@@ -101,6 +115,7 @@ impl SqeFuture {
         SqeFuture {
             shared: Rc::new(RefCell::new(SqeFutureShared {
                 waker: None,
+                cqe: None,
                 completed: false,
             })),
         }
@@ -249,6 +264,7 @@ impl Executor {
                         .expect("CQE user_data doesn't exist in the task map!");
 
                     task.borrow_mut().completed = true;
+                    task.borrow_mut().cqe = Some(StrippedCqe::from(&*cqe));
                     task.borrow_mut()
                         .waker
                         .as_ref()
@@ -513,9 +529,8 @@ fn main() {
         exec.clone().borrow().spawn(async move {
             println!("I am an async function!");
 
-            let nop = SqeFuture::new();
-
-            nop.await;
+            let nop_result = SqeFuture::new().await;
+            println!("CQE result: {nop_result:#?}");
 
             inner.borrow().submit().unwrap();
         });
