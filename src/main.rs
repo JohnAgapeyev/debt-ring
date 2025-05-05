@@ -186,10 +186,6 @@ struct Executor {
     task_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
     future_map: RefCell<HashMap<u64, LocalBoxFuture<'static, ()>>>,
 
-    work_queue: Receiver<Arc<Task>>,
-    //Horrible hack to allow dropping the sender to ensure we see the end of stream on the channel
-    pub task_sender: Option<Sender<Arc<Task>>>,
-
     pub task_queue: RefCell<VecDeque<u64>>,
 }
 
@@ -199,13 +195,10 @@ impl Executor {
         let task_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let future_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let task_queue = RefCell::new(VecDeque::with_capacity(entries as usize));
-        let (task_sender, work_queue) = channel();
         Ok(Executor {
             ring,
             task_map,
             future_map,
-            work_queue,
-            task_sender: Some(task_sender),
             task_queue,
         })
     }
