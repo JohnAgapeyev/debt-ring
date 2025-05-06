@@ -144,6 +144,29 @@ impl SqeFuture {
         exec.register_task(Task(sqe.user_data), shared_copy);
         SqeFuture { shared }
     }
+    #[must_use]
+    fn socket(
+        exec: &Executor,
+        domain: i32,
+        sock_type: i32,
+        protocol: i32,
+        flags: u32,
+    ) -> SqeFuture {
+        let shared = Rc::new(RefCell::new(SqeFutureShared {
+            waker: None,
+            cqe: None,
+            completed: false,
+        }));
+        let shared_copy = Rc::clone(&shared);
+
+        let sqe = exec.get_sqe();
+        unsafe {
+            io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
+        }
+
+        exec.register_task(Task(sqe.user_data), shared_copy);
+        SqeFuture { shared }
+    }
 }
 
 struct Ring {
@@ -548,6 +571,15 @@ fn main() {
 
             let nop_result = SqeFuture::nop(&inner.borrow()).await;
             println!("CQE result: {nop_result:#?}");
+            let socket_result = SqeFuture::socket(
+                &inner.borrow(),
+                AddressFamily::Inet as i32,
+                SockType::Stream as i32,
+                SockProtocol::Tcp as i32,
+                0,
+            )
+            .await;
+            println!("CQE result: {socket_result:#?}");
 
             inner.borrow().submit().unwrap();
         });
