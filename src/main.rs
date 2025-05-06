@@ -101,15 +101,8 @@ impl Future for SqeFuture {
                 shared.waker = Some(cx.waker().clone());
             }
 
-            let shared_copy = self.shared.clone();
-
             EXECUTOR.with_borrow(move |exec| {
-                let binding = exec.borrow();
-                let sqe = binding.get_sqe();
-                binding.register_task(Task(sqe.user_data), shared_copy);
-                unsafe {
-                    io_uring_prep_nop(sqe);
-                }
+                //I want to defer submits to the main event loop somehow
                 exec.borrow().submit().unwrap();
             });
 
@@ -132,6 +125,24 @@ impl SqeFuture {
                 completed: false,
             })),
         }
+    }
+
+    #[must_use]
+    fn nop(exec: &Executor) -> SqeFuture {
+        let shared = Rc::new(RefCell::new(SqeFutureShared {
+            waker: None,
+            cqe: None,
+            completed: false,
+        }));
+        let shared_copy = Rc::clone(&shared);
+
+        let sqe = exec.get_sqe();
+        unsafe {
+            io_uring_prep_nop(sqe);
+        }
+
+        exec.register_task(Task(sqe.user_data), shared_copy);
+        SqeFuture { shared }
     }
 }
 
@@ -535,7 +546,7 @@ fn main() {
         exec.clone().borrow().spawn(async move {
             println!("I am an async function!");
 
-            let nop_result = SqeFuture::new().await;
+            let nop_result = SqeFuture::nop(&inner.borrow()).await;
             println!("CQE result: {nop_result:#?}");
 
             inner.borrow().submit().unwrap();
