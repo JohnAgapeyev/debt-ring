@@ -19,6 +19,7 @@ use std::time::Instant;
 use nix::sys::socket::{
     AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrLike, socket,
 };
+use nix::sys::time::TimeSpec;
 
 use clap::Parser;
 
@@ -93,7 +94,6 @@ impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut shared = self.shared.borrow_mut();
-        println!("Future polled!");
         if !shared.completed {
             if let Some(wake) = &mut shared.waker {
                 wake.clone_from(cx.waker());
@@ -162,6 +162,45 @@ impl SqeFuture {
         let sqe = exec.get_sqe();
         unsafe {
             io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
+        }
+
+        exec.register_task(Task(sqe.user_data), shared_copy);
+        SqeFuture { shared }
+    }
+    #[must_use]
+    fn connect(
+        exec: &Executor,
+        sockfd: i32,
+        addr: *const sockaddr,
+        addrlen: socklen_t,
+    ) -> SqeFuture {
+        let shared = Rc::new(RefCell::new(SqeFutureShared {
+            waker: None,
+            cqe: None,
+            completed: false,
+        }));
+        let shared_copy = Rc::clone(&shared);
+
+        let sqe = exec.get_sqe();
+        unsafe {
+            io_uring_prep_connect(sqe, sockfd, addr, addrlen);
+        }
+
+        exec.register_task(Task(sqe.user_data), shared_copy);
+        SqeFuture { shared }
+    }
+    #[must_use]
+    fn send(exec: &Executor, sockfd: i32, buf: &[u8], flags: i32) -> SqeFuture {
+        let shared = Rc::new(RefCell::new(SqeFutureShared {
+            waker: None,
+            cqe: None,
+            completed: false,
+        }));
+        let shared_copy = Rc::clone(&shared);
+
+        let sqe = exec.get_sqe();
+        unsafe {
+            io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
         }
 
         exec.register_task(Task(sqe.user_data), shared_copy);
@@ -269,52 +308,62 @@ impl Executor {
         self.task_queue.borrow_mut().push_back(task.0);
     }
     pub fn run(&self) {
-        let mut map = self.future_map.borrow_mut();
-        while let Some(task) = self.task_queue.borrow_mut().pop_front() {
-            let future = map
-                .get_mut(&task)
-                .expect("Task queue contained an ID not in the future map");
-
-            let waker = Waker::from(Arc::new(Task(task)));
-            let context = &mut Context::from_waker(&waker);
-            if future.as_mut().poll(context).is_ready() {
-                map.remove(&task);
-            }
-        }
-        //No work in the queue to be done
-        println!("No work in the queue!");
-
         loop {
-            unsafe {
-                let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
-                let res = io_uring_peek_cqe(self.ring.inner.as_ptr(), &mut cqe);
-                println!("Got res: {res}");
-                if !cqe.is_null() {
-                    //Got a CQE to process
-                    println!("Got a CQE: {:#?}", *cqe);
+            let mut map = self.future_map.borrow_mut();
+            while let Some(task) = self.task_queue.borrow_mut().pop_front() {
+                let future = map
+                    .get_mut(&task)
+                    .expect("Task queue contained an ID not in the future map");
 
-                    let task_id = io_uring_cqe_get_data64(cqe);
+                let waker = Waker::from(Arc::new(Task(task)));
+                let context = &mut Context::from_waker(&waker);
+                if future.as_mut().poll(context).is_ready() {
+                    map.remove(&task);
+                }
+            }
+            //No work in the queue to be done
+            println!("No work in the queue!");
 
-                    println!("Waking task: {:#?}", task_id);
+            loop {
+                unsafe {
+                    let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
-                    let task_map_binding = self.task_map.borrow();
+                    let mut ts = __kernel_timespec {
+                        tv_sec: 1,
+                        tv_nsec: 0,
+                    };
 
-                    let task = task_map_binding
-                        .get(&task_id)
-                        .expect("CQE user_data doesn't exist in the task map!");
+                    let res =
+                        io_uring_wait_cqe_timeout(self.ring.inner.as_ptr(), &mut cqe, &mut ts);
+                    println!("Got res: {res}");
+                    if !cqe.is_null() {
+                        //Got a CQE to process
+                        println!("Got a CQE: {:#?}", *cqe);
 
-                    task.borrow_mut().completed = true;
-                    task.borrow_mut().cqe = Some(StrippedCqe::from(&*cqe));
-                    task.borrow_mut()
-                        .waker
-                        .as_ref()
-                        .expect("Got a completed task with no waker!")
-                        .wake_by_ref();
+                        let task_id = io_uring_cqe_get_data64(cqe);
 
-                    io_uring_cqe_seen(self.ring.inner.as_ptr(), cqe);
-                } else {
-                    println!("No more CQEs");
-                    return;
+                        println!("Waking task: {:#?}", task_id);
+
+                        let task_map_binding = self.task_map.borrow();
+
+                        let task = task_map_binding
+                            .get(&task_id)
+                            .expect("CQE user_data doesn't exist in the task map!");
+
+                        task.borrow_mut().completed = true;
+                        task.borrow_mut().cqe = Some(StrippedCqe::from(&*cqe));
+                        task.borrow_mut()
+                            .waker
+                            .as_ref()
+                            .expect("Got a completed task with no waker!")
+                            .wake_by_ref();
+
+                        io_uring_cqe_seen(self.ring.inner.as_ptr(), cqe);
+                        println!("Done with task: {:#?}", task_id);
+                    } else {
+                        println!("No more CQEs");
+                        break;
+                    }
                 }
             }
         }
@@ -581,10 +630,25 @@ fn main() {
             .await;
             println!("CQE result: {socket_result:#?}");
 
-            inner.borrow().submit().unwrap();
+            let host = "127.0.0.1";
+            let port = 8080;
+            let addr = SockaddrIn::from_str(&format!("{}:{}", host, port)).unwrap();
+
+            let connect_result = SqeFuture::connect(
+                &inner.borrow(),
+                socket_result.res,
+                addr.as_ptr() as *const liburing_sys::sockaddr,
+                addr.len(),
+            )
+            .await;
+            println!("CQE result: {connect_result:#?}");
+
+            let msg = "Hello io_uring world!\n";
+
+            let send_result =
+                SqeFuture::send(&inner.borrow(), socket_result.res, &msg.as_bytes(), 0).await;
+            println!("CQE result: {connect_result:#?}");
         });
-        //exec.task_sender = None;
-        exec.clone().borrow().run();
         exec.clone().borrow().run();
     });
 
