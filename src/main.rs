@@ -603,16 +603,6 @@ struct Cli {
 //}
 
 fn main() {
-    //let inner = EXECUTOR.get().clone();
-    //EXECUTOR.borrow().spawn(async move {
-    //    println!("I am an async function!");
-
-    //    unsafe {
-    //        io_uring_prep_nop(inner.clone().borrow_mut().get_sqe());
-    //    }
-    //    inner.borrow_mut().submit().unwrap();
-    //});
-
     EXECUTOR.with_borrow(move |exec| {
         let inner = exec.clone();
         exec.clone().borrow().spawn(async move {
@@ -651,22 +641,6 @@ fn main() {
         });
         exec.clone().borrow().run();
     });
-
-    //EXECUTOR.with_borrow_mut(|exec| {
-    //    exec.spawn(async {
-    //        println!("I am an async function!");
-
-    //        let sqe = exec.get_sqe();
-    //        unsafe {
-    //            io_uring_prep_nop(sqe);
-    //        }
-    //        exec.submit().unwrap();
-    //    });
-
-    //    exec.task_sender = None;
-
-    //    exec.run();
-    //});
 
     return;
 
