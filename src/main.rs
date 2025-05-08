@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::future::Future;
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::task::{Context, Poll, Wake, Waker};
-use std::time::Instant;
+use std::time::Duration;
 
 use nix::sys::socket::{
     AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrLike, socket,
@@ -93,7 +93,6 @@ struct SqeFutureShared {
 impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        println!("Future polled");
         let mut shared = self.shared.borrow_mut();
         if !shared.completed {
             if let Some(wake) = &mut shared.waker {
@@ -253,6 +252,39 @@ impl Ring {
             }
         }
     }
+    pub fn submit_and_wait_timeout(&self, timeout: Option<Duration>) -> Result<i32, Error> {
+        let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
+
+        let mut rcts = Rc::new(__kernel_timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        });
+
+        let ts = match timeout {
+            Some(d) => {
+                let mts = Rc::get_mut(&mut rcts).unwrap();
+                *mts = __kernel_timespec {
+                    tv_sec: d.as_secs() as i64,
+                    tv_nsec: d.subsec_nanos() as i64,
+                };
+                mts
+            }
+            None => std::ptr::null_mut(),
+        };
+
+        unsafe {
+            match io_uring_submit_and_wait_timeout(
+                self.inner.as_ptr(),
+                &mut cqe,
+                1,
+                ts,
+                std::ptr::null_mut(),
+            ) {
+                n if n >= 0 => Ok(n),
+                err => Err(Error::from_raw_os_error(-err)),
+            }
+        }
+    }
 }
 
 impl Drop for Ring {
@@ -304,7 +336,6 @@ impl Executor {
     }
     pub fn run(&self) {
         loop {
-            println!("Gonna poll task queue futures");
             let mut map = self.future_map.borrow_mut();
             while let Some(task) = self.task_queue.borrow_mut().pop_front() {
                 let future = map
@@ -323,48 +354,48 @@ impl Executor {
             loop {
                 let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
-                let mut ts = __kernel_timespec {
-                    tv_sec: 1,
-                    tv_nsec: 0,
+                let res = self.ring.submit_and_wait_timeout(Some(Duration::new(1, 0)));
+                match res {
+                    Ok(_) => (),
+                    Err(e) => {
+                        let inner = e.raw_os_error().unwrap();
+                        //62 is ETIME errno value
+                        if inner == 62 {
+                            println!("No more CQEs");
+                            break;
+                        }
+                        panic!("Got an unknown error: {}", inner);
+                    }
                 };
 
                 unsafe {
-                    let res = io_uring_submit_and_wait_timeout(
-                        self.ring.inner.as_ptr(),
-                        &mut cqe,
-                        1,
-                        &mut ts,
-                        std::ptr::null_mut(),
-                    );
-                    println!("Got res: {res}");
-                    if !cqe.is_null() {
-                        //Got a CQE to process
-                        println!("Got a CQE: {:#?}", *cqe);
+                    io_uring_peek_cqe(self.ring.inner.as_ptr(), &mut cqe);
+                    //We peek after waiting, so there should always be a valid CQE to process here
+                    assert!(!cqe.is_null());
 
-                        let task_id = io_uring_cqe_get_data64(cqe);
+                    //Got a CQE to process
+                    println!("Got a CQE: {:#?}", *cqe);
 
-                        println!("Waking task: {:#?}", task_id);
+                    let task_id = io_uring_cqe_get_data64(cqe);
 
-                        let task_map_binding = self.task_map.borrow();
+                    println!("Waking task: {:#?}", task_id);
 
-                        let task = task_map_binding
-                            .get(&task_id)
-                            .expect("CQE user_data doesn't exist in the task map!");
+                    let task_map_binding = self.task_map.borrow();
 
-                        task.borrow_mut().completed = true;
-                        task.borrow_mut().cqe = Some(StrippedCqe::from(&*cqe));
-                        task.borrow_mut()
-                            .waker
-                            .as_ref()
-                            .expect("Got a completed task with no waker!")
-                            .wake_by_ref();
+                    let task = task_map_binding
+                        .get(&task_id)
+                        .expect("CQE user_data doesn't exist in the task map!");
 
-                        io_uring_cqe_seen(self.ring.inner.as_ptr(), cqe);
-                        println!("Done with task: {:#?}", task_id);
-                    } else {
-                        println!("No more CQEs");
-                        break;
-                    }
+                    task.borrow_mut().completed = true;
+                    task.borrow_mut().cqe = Some(StrippedCqe::from(&*cqe));
+                    task.borrow_mut()
+                        .waker
+                        .as_ref()
+                        .expect("Got a completed task with no waker!")
+                        .wake_by_ref();
+
+                    io_uring_cqe_seen(self.ring.inner.as_ptr(), cqe);
+                    println!("Done with task: {:#?}", task_id);
                 }
             }
         }
