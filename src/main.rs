@@ -93,6 +93,7 @@ struct SqeFutureShared {
 impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        println!("Future polled");
         let mut shared = self.shared.borrow_mut();
         if !shared.completed {
             if let Some(wake) = &mut shared.waker {
@@ -100,12 +101,6 @@ impl Future for SqeFuture {
             } else {
                 shared.waker = Some(cx.waker().clone());
             }
-
-            EXECUTOR.with_borrow(move |exec| {
-                //I want to defer submits to the main event loop somehow
-                exec.borrow().submit().unwrap();
-            });
-
             return Poll::Pending;
         }
         Poll::Ready(
@@ -272,7 +267,7 @@ struct Executor {
     task_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
     future_map: RefCell<HashMap<u64, LocalBoxFuture<'static, ()>>>,
 
-    pub task_queue: RefCell<VecDeque<u64>>,
+    task_queue: RefCell<VecDeque<u64>>,
 }
 
 impl Executor {
@@ -309,6 +304,7 @@ impl Executor {
     }
     pub fn run(&self) {
         loop {
+            println!("Gonna poll task queue futures");
             let mut map = self.future_map.borrow_mut();
             while let Some(task) = self.task_queue.borrow_mut().pop_front() {
                 let future = map
@@ -325,16 +321,21 @@ impl Executor {
             println!("No work in the queue!");
 
             loop {
+                let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
+
+                let mut ts = __kernel_timespec {
+                    tv_sec: 1,
+                    tv_nsec: 0,
+                };
+
                 unsafe {
-                    let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
-
-                    let mut ts = __kernel_timespec {
-                        tv_sec: 1,
-                        tv_nsec: 0,
-                    };
-
-                    let res =
-                        io_uring_wait_cqe_timeout(self.ring.inner.as_ptr(), &mut cqe, &mut ts);
+                    let res = io_uring_submit_and_wait_timeout(
+                        self.ring.inner.as_ptr(),
+                        &mut cqe,
+                        1,
+                        &mut ts,
+                        std::ptr::null_mut(),
+                    );
                     println!("Got res: {res}");
                     if !cqe.is_null() {
                         //Got a CQE to process
