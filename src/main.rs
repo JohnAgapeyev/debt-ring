@@ -255,19 +255,16 @@ impl Ring {
     pub fn submit_and_wait_timeout(&self, timeout: Option<Duration>) -> Result<i32, Error> {
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
-        let mut rcts = Rc::new(__kernel_timespec {
+        let mut local_ts = __kernel_timespec {
             tv_sec: 0,
             tv_nsec: 0,
-        });
+        };
 
         let ts = match timeout {
             Some(d) => {
-                let mts = Rc::get_mut(&mut rcts).unwrap();
-                *mts = __kernel_timespec {
-                    tv_sec: d.as_secs() as i64,
-                    tv_nsec: d.subsec_nanos() as i64,
-                };
-                mts
+                local_ts.tv_sec = d.as_secs() as i64;
+                local_ts.tv_nsec = d.subsec_nanos() as i64;
+                &mut local_ts
             }
             None => std::ptr::null_mut(),
         };
