@@ -352,43 +352,40 @@ impl Executor {
             //No work in the queue to be done
             println!("No work in the queue!");
 
-            loop {
-                match self.ring.submit_and_wait_timeout(
-                    Some(Duration::new(1, 0)),
-                    |task_id, cqe| {
-                        //Got a CQE to process
-                        println!("Got a CQE: {:#?}", cqe);
-                        println!("Waking task: {:#?}", task_id);
+            match self
+                .ring
+                .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
+                    //Got a CQE to process
+                    println!("Got a CQE: {:#?}", cqe);
+                    println!("Waking task: {:#?}", task_id);
 
-                        let task_map_binding = self.task_map.borrow();
+                    let task_map_binding = self.task_map.borrow();
 
-                        let task = task_map_binding
-                            .get(&task_id)
-                            .expect("CQE user_data doesn't exist in the task map!");
+                    let task = task_map_binding
+                        .get(&task_id)
+                        .expect("CQE user_data doesn't exist in the task map!");
 
-                        task.borrow_mut().completed = true;
-                        task.borrow_mut().cqe = Some(*cqe);
-                        task.borrow_mut()
-                            .waker
-                            .as_ref()
-                            .expect("Got a completed task with no waker!")
-                            .wake_by_ref();
+                    task.borrow_mut().completed = true;
+                    task.borrow_mut().cqe = Some(*cqe);
+                    task.borrow_mut()
+                        .waker
+                        .as_ref()
+                        .expect("Got a completed task with no waker!")
+                        .wake_by_ref();
 
-                        println!("Done with task: {:#?}", task_id);
-                    },
-                ) {
-                    Ok(_) => (),
-                    Err(e) => {
-                        let inner = e.raw_os_error().unwrap();
-                        //62 is ETIME errno value
-                        if inner == 62 {
-                            println!("No more CQEs");
-                            break;
-                        }
-                        panic!("Got an unknown error: {}", inner);
+                    println!("Done with task: {:#?}", task_id);
+                }) {
+                Ok(_) => (),
+                Err(e) => {
+                    let inner = e.raw_os_error().unwrap();
+                    //62 is ETIME errno value
+                    if inner == 62 {
+                        println!("No more CQEs");
+                        continue;
                     }
-                };
-            }
+                    panic!("Got an unknown error: {}", inner);
+                }
+            };
         }
     }
 }
