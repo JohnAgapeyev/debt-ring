@@ -22,7 +22,7 @@ use clap::Parser;
 use liburing_sys::*;
 
 thread_local! {
-    static EXECUTOR: RefCell<Rc<RefCell<Executor>>> = RefCell::new(Rc::new(RefCell::new(Executor::new(32, 0).unwrap())));
+    static EXECUTOR: Rc<RefCell<Executor>> = Rc::new(RefCell::new(Executor::new(32, 0).unwrap()));
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -30,10 +30,8 @@ pub struct Task(u64);
 
 impl Wake for Task {
     fn wake(self: Arc<Self>) {
-        let cloned = self.clone();
-
-        EXECUTOR.with_borrow(move |exec| {
-            exec.clone().borrow().wake(*cloned);
+        EXECUTOR.with(move |exec| {
+            exec.borrow().wake(*self);
         });
     }
 }
@@ -391,8 +389,8 @@ impl Executor {
 }
 
 pub fn spawn(future: impl Future<Output = ()> + 'static) {
-    EXECUTOR.with_borrow(move |exec| {
-        exec.clone().borrow().spawn(future);
+    EXECUTOR.with(move |exec| {
+        exec.borrow().spawn(future);
     });
 }
 
@@ -632,7 +630,7 @@ fn main() {
     spawn(async move {
         println!("I am an async function!");
 
-        let inner = EXECUTOR.with_borrow(move |exec| Rc::clone(&exec));
+        let inner = EXECUTOR.with(move |exec| Rc::clone(&exec));
 
         let nop_result = SqeFuture::nop(&inner.borrow()).await;
         println!("CQE result: {nop_result:#?}");
@@ -666,7 +664,7 @@ fn main() {
         println!("CQE result: {send_result:#?}");
     });
 
-    EXECUTOR.with_borrow(move |exec| {
+    EXECUTOR.with(move |exec| {
         exec.borrow().run();
     });
 
