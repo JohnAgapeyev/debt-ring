@@ -107,84 +107,65 @@ impl Future for SqeFuture {
 }
 
 impl SqeFuture {
+    fn new() -> SqeFuture {
+        SqeFuture {
+            shared: Rc::new(RefCell::new(SqeFutureShared {
+                waker: None,
+                cqe: None,
+                completed: false,
+            })),
+        }
+    }
     #[must_use]
-    fn nop(exec: &Executor) -> SqeFuture {
-        let shared = Rc::new(RefCell::new(SqeFutureShared {
-            waker: None,
-            cqe: None,
-            completed: false,
-        }));
-        let shared_copy = Rc::clone(&shared);
-
+    pub fn nop(exec: &Executor) -> SqeFuture {
+        let fut = SqeFuture::new();
         let sqe = exec.get_sqe();
         unsafe {
             io_uring_prep_nop(sqe);
         }
-
-        exec.register_task(Task(sqe.user_data), shared_copy);
-        SqeFuture { shared }
+        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+        fut
     }
     #[must_use]
-    fn socket(
+    pub fn socket(
         exec: &Executor,
         domain: i32,
         sock_type: i32,
         protocol: i32,
         flags: u32,
     ) -> SqeFuture {
-        let shared = Rc::new(RefCell::new(SqeFutureShared {
-            waker: None,
-            cqe: None,
-            completed: false,
-        }));
-        let shared_copy = Rc::clone(&shared);
-
+        let fut = SqeFuture::new();
         let sqe = exec.get_sqe();
         unsafe {
             io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
         }
-
-        exec.register_task(Task(sqe.user_data), shared_copy);
-        SqeFuture { shared }
+        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+        fut
     }
     #[must_use]
-    fn connect(
+    pub fn connect(
         exec: &Executor,
         sockfd: i32,
         addr: *const sockaddr,
         addrlen: socklen_t,
     ) -> SqeFuture {
-        let shared = Rc::new(RefCell::new(SqeFutureShared {
-            waker: None,
-            cqe: None,
-            completed: false,
-        }));
-        let shared_copy = Rc::clone(&shared);
-
+        let fut = SqeFuture::new();
         let sqe = exec.get_sqe();
         unsafe {
             io_uring_prep_connect(sqe, sockfd, addr, addrlen);
         }
-
-        exec.register_task(Task(sqe.user_data), shared_copy);
-        SqeFuture { shared }
+        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+        fut
     }
     #[must_use]
-    fn send(exec: &Executor, sockfd: i32, buf: &[u8], flags: i32) -> SqeFuture {
-        let shared = Rc::new(RefCell::new(SqeFutureShared {
-            waker: None,
-            cqe: None,
-            completed: false,
-        }));
-        let shared_copy = Rc::clone(&shared);
-
+    pub fn send(exec: &Executor, sockfd: i32, buf: &[u8], flags: i32) -> SqeFuture {
+        let fut = SqeFuture::new();
         let sqe = exec.get_sqe();
         unsafe {
             io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
         }
-
-        exec.register_task(Task(sqe.user_data), shared_copy);
-        SqeFuture { shared }
+        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+        fut
     }
 }
 
@@ -372,30 +353,30 @@ impl Executor {
             println!("No work in the queue!");
 
             loop {
-                let res =
-                    self.ring
-                        .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
-                            //Got a CQE to process
-                            println!("Got a CQE: {:#?}", cqe);
-                            println!("Waking task: {:#?}", task_id);
+                match self.ring.submit_and_wait_timeout(
+                    Some(Duration::new(1, 0)),
+                    |task_id, cqe| {
+                        //Got a CQE to process
+                        println!("Got a CQE: {:#?}", cqe);
+                        println!("Waking task: {:#?}", task_id);
 
-                            let task_map_binding = self.task_map.borrow();
+                        let task_map_binding = self.task_map.borrow();
 
-                            let task = task_map_binding
-                                .get(&task_id)
-                                .expect("CQE user_data doesn't exist in the task map!");
+                        let task = task_map_binding
+                            .get(&task_id)
+                            .expect("CQE user_data doesn't exist in the task map!");
 
-                            task.borrow_mut().completed = true;
-                            task.borrow_mut().cqe = Some(*cqe);
-                            task.borrow_mut()
-                                .waker
-                                .as_ref()
-                                .expect("Got a completed task with no waker!")
-                                .wake_by_ref();
+                        task.borrow_mut().completed = true;
+                        task.borrow_mut().cqe = Some(*cqe);
+                        task.borrow_mut()
+                            .waker
+                            .as_ref()
+                            .expect("Got a completed task with no waker!")
+                            .wake_by_ref();
 
-                            println!("Done with task: {:#?}", task_id);
-                        });
-                match res {
+                        println!("Done with task: {:#?}", task_id);
+                    },
+                ) {
                     Ok(_) => (),
                     Err(e) => {
                         let inner = e.raw_os_error().unwrap();
