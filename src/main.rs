@@ -204,18 +204,19 @@ impl SqeFuture {
 
 struct Ring {
     pub inner: RefCell<io_uring>,
-    pub cq_buf: Vec<*mut io_uring_cqe>,
+    pub cq_buf: RefCell<Vec<*mut io_uring_cqe>>,
 }
 
 impl Ring {
     pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
-        let cq_buf = Vec::with_capacity(entries as usize);
+        let mut cq_buf = Vec::with_capacity(entries as usize);
+        cq_buf.resize_with(entries as usize, std::ptr::null_mut);
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
             match io_uring_queue_init(entries, &mut ring, flags) {
                 0 => Ok(Ring {
                     inner: RefCell::new(ring),
-                    cq_buf,
+                    cq_buf: RefCell::new(cq_buf),
                 }),
                 err => Err(Error::from_raw_os_error(-err)),
             }
@@ -252,7 +253,14 @@ impl Ring {
             }
         }
     }
-    pub fn submit_and_wait_timeout(&self, timeout: Option<Duration>) -> Result<i32, Error> {
+    pub fn submit_and_wait_timeout<F>(
+        &self,
+        timeout: Option<Duration>,
+        cqe_handler: F,
+    ) -> Result<i32, Error>
+    where
+        F: Fn(u64, &StrippedCqe),
+    {
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
         let mut local_ts = __kernel_timespec {
@@ -269,18 +277,47 @@ impl Ring {
             None => std::ptr::null_mut(),
         };
 
-        unsafe {
-            match io_uring_submit_and_wait_timeout(
+        let res = unsafe {
+            io_uring_submit_and_wait_timeout(
                 self.inner.as_ptr(),
                 &mut cqe,
                 1,
                 ts,
                 std::ptr::null_mut(),
-            ) {
-                n if n >= 0 => Ok(n),
-                err => Err(Error::from_raw_os_error(-err)),
+            )
+        };
+        // On failure it returns -errno.
+        if res < 0 {
+            return Err(Error::from_raw_os_error(-res));
+        }
+        assert!(res >= 0);
+
+        let mut cq_buf = self.cq_buf.borrow_mut();
+        cq_buf.clear();
+        let capacity = cq_buf.capacity();
+        cq_buf.resize_with(capacity, std::ptr::null_mut);
+
+        unsafe {
+            let nfilled = io_uring_peek_batch_cqe(
+                self.inner.as_ptr(),
+                cq_buf.as_mut_ptr(),
+                cq_buf.len() as u32,
+            );
+            if nfilled >= 1 {
+                //Got some CQEs to process
+                assert!(nfilled <= cq_buf.len() as u32);
+                for i in 0..nfilled {
+                    let cqe = cq_buf[i as usize];
+                    assert!(!cqe.is_null());
+                    let task_id = io_uring_cqe_get_data64(cqe);
+                    let stripped = StrippedCqe::from(&*cqe);
+                    cqe_handler(task_id, &stripped);
+                }
+                io_uring_cq_advance(self.inner.as_ptr(), nfilled);
             }
         }
+
+        Ok(res)
     }
 }
 
@@ -351,7 +388,29 @@ impl Executor {
             loop {
                 let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
-                let res = self.ring.submit_and_wait_timeout(Some(Duration::new(1, 0)));
+                let res =
+                    self.ring
+                        .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
+                            //Got a CQE to process
+                            println!("Got a CQE: {:#?}", cqe);
+                            println!("Waking task: {:#?}", task_id);
+
+                            let task_map_binding = self.task_map.borrow();
+
+                            let task = task_map_binding
+                                .get(&task_id)
+                                .expect("CQE user_data doesn't exist in the task map!");
+
+                            task.borrow_mut().completed = true;
+                            task.borrow_mut().cqe = Some(*cqe);
+                            task.borrow_mut()
+                                .waker
+                                .as_ref()
+                                .expect("Got a completed task with no waker!")
+                                .wake_by_ref();
+
+                            println!("Done with task: {:#?}", task_id);
+                        });
                 match res {
                     Ok(_) => (),
                     Err(e) => {
@@ -364,36 +423,6 @@ impl Executor {
                         panic!("Got an unknown error: {}", inner);
                     }
                 };
-
-                unsafe {
-                    io_uring_peek_cqe(self.ring.inner.as_ptr(), &mut cqe);
-                    //We peek after waiting, so there should always be a valid CQE to process here
-                    assert!(!cqe.is_null());
-
-                    //Got a CQE to process
-                    println!("Got a CQE: {:#?}", *cqe);
-
-                    let task_id = io_uring_cqe_get_data64(cqe);
-
-                    println!("Waking task: {:#?}", task_id);
-
-                    let task_map_binding = self.task_map.borrow();
-
-                    let task = task_map_binding
-                        .get(&task_id)
-                        .expect("CQE user_data doesn't exist in the task map!");
-
-                    task.borrow_mut().completed = true;
-                    task.borrow_mut().cqe = Some(StrippedCqe::from(&*cqe));
-                    task.borrow_mut()
-                        .waker
-                        .as_ref()
-                        .expect("Got a completed task with no waker!")
-                        .wake_by_ref();
-
-                    io_uring_cqe_seen(self.ring.inner.as_ptr(), cqe);
-                    println!("Done with task: {:#?}", task_id);
-                }
             }
         }
     }
