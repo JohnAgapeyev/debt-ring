@@ -6,20 +6,16 @@ use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::future::Future;
 use std::io::{Error, ErrorKind};
-use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use nix::sys::socket::{
     AddressFamily, SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrLike, socket,
 };
-use nix::sys::time::TimeSpec;
 
 use clap::Parser;
 
@@ -111,16 +107,6 @@ impl Future for SqeFuture {
 }
 
 impl SqeFuture {
-    fn new() -> SqeFuture {
-        SqeFuture {
-            shared: Rc::new(RefCell::new(SqeFutureShared {
-                waker: None,
-                cqe: None,
-                completed: false,
-            })),
-        }
-    }
-
     #[must_use]
     fn nop(exec: &Executor) -> SqeFuture {
         let shared = Rc::new(RefCell::new(SqeFutureShared {
@@ -386,8 +372,6 @@ impl Executor {
             println!("No work in the queue!");
 
             loop {
-                let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
-
                 let res =
                     self.ring
                         .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
@@ -694,8 +678,8 @@ fn main() {
             let msg = "Hello io_uring world!\n";
 
             let send_result =
-                SqeFuture::send(&inner.borrow(), socket_result.res, &msg.as_bytes(), 0).await;
-            println!("CQE result: {connect_result:#?}");
+                SqeFuture::send(&inner.borrow(), socket_result.res, msg.as_bytes(), 0).await;
+            println!("CQE result: {send_result:#?}");
         });
         exec.clone().borrow().run();
     });
