@@ -30,9 +30,9 @@ pub struct Task(u64);
 
 impl Wake for Task {
     fn wake(self: Arc<Self>) {
-        EXECUTOR.with(move |exec| {
-            exec.borrow().wake(*self);
-        });
+        Handle::current().with_exec(|exec| {
+            exec.wake(*self);
+        })
     }
 }
 
@@ -43,6 +43,25 @@ pub fn get_next_task_id() -> Task {
     let out_id = NEXT_TASK_ID.get();
     NEXT_TASK_ID.set(out_id.wrapping_add(1));
     Task(out_id)
+}
+
+#[derive(Clone)]
+pub(crate) struct Handle {
+    inner: Rc<RefCell<Executor>>,
+}
+
+impl Handle {
+    pub fn current() -> Handle {
+        EXECUTOR.with(|exec| Handle {
+            inner: Rc::clone(exec),
+        })
+    }
+    pub fn with_exec<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Executor) -> R,
+    {
+        f(&self.inner.borrow())
+    }
 }
 
 struct SqeFuture {
@@ -65,6 +84,7 @@ impl From<&io_uring_cqe> for StrippedCqe {
     }
 }
 
+#[derive(Debug, Clone)]
 struct SqeFutureShared {
     pub waker: Option<Waker>,
     pub cqe: Option<StrippedCqe>,
@@ -115,58 +135,56 @@ impl SqeFuture {
         }
     }
     #[must_use]
-    pub fn nop(exec: &Executor) -> SqeFuture {
-        let fut = SqeFuture::new();
-        let sqe = exec.get_sqe();
-        unsafe {
-            io_uring_prep_nop(sqe);
-        }
-        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
-        fut
+    pub fn nop() -> SqeFuture {
+        Handle::current().with_exec(|exec| {
+            let fut = SqeFuture::new();
+            let sqe = exec.get_sqe();
+            unsafe {
+                io_uring_prep_nop(sqe);
+            }
+            exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+            fut
+        })
     }
     #[must_use]
-    pub fn socket(
-        exec: &Executor,
-        domain: i32,
-        sock_type: i32,
-        protocol: i32,
-        flags: u32,
-    ) -> SqeFuture {
-        let fut = SqeFuture::new();
-        let sqe = exec.get_sqe();
-        unsafe {
-            io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
-        }
-        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
-        fut
+    pub fn socket(domain: i32, sock_type: i32, protocol: i32, flags: u32) -> SqeFuture {
+        Handle::current().with_exec(|exec| {
+            let fut = SqeFuture::new();
+            let sqe = exec.get_sqe();
+            unsafe {
+                io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
+            }
+            exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+            fut
+        })
     }
     #[must_use]
-    pub fn connect(
-        exec: &Executor,
-        sockfd: i32,
-        addr: *const sockaddr,
-        addrlen: socklen_t,
-    ) -> SqeFuture {
-        let fut = SqeFuture::new();
-        let sqe = exec.get_sqe();
-        unsafe {
-            io_uring_prep_connect(sqe, sockfd, addr, addrlen);
-        }
-        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
-        fut
+    pub fn connect(sockfd: i32, addr: *const sockaddr, addrlen: socklen_t) -> SqeFuture {
+        Handle::current().with_exec(|exec| {
+            let fut = SqeFuture::new();
+            let sqe = exec.get_sqe();
+            unsafe {
+                io_uring_prep_connect(sqe, sockfd, addr, addrlen);
+            }
+            exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+            fut
+        })
     }
     #[must_use]
-    pub fn send(exec: &Executor, sockfd: i32, buf: &[u8], flags: i32) -> SqeFuture {
-        let fut = SqeFuture::new();
-        let sqe = exec.get_sqe();
-        unsafe {
-            io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
-        }
-        exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
-        fut
+    pub fn send(sockfd: i32, buf: &[u8], flags: i32) -> SqeFuture {
+        Handle::current().with_exec(|exec| {
+            let fut = SqeFuture::new();
+            let sqe = exec.get_sqe();
+            unsafe {
+                io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
+            }
+            exec.register_task(Task(sqe.user_data), Rc::clone(&fut.shared));
+            fut
+        })
     }
 }
 
+#[derive(Debug, Clone)]
 struct Ring {
     pub inner: RefCell<io_uring>,
     pub cq_buf: RefCell<Vec<*mut io_uring_cqe>>,
@@ -292,7 +310,7 @@ impl Drop for Ring {
     }
 }
 
-struct Executor {
+pub(crate) struct Executor {
     ring: Ring,
 
     task_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
@@ -401,9 +419,9 @@ impl Executor {
 }
 
 pub fn spawn(future: impl Future<Output = ()> + 'static) {
-    EXECUTOR.with(move |exec| {
-        exec.borrow().spawn(future);
-    });
+    Handle::current().with_exec(|exec| {
+        exec.spawn(future);
+    })
 }
 
 #[derive(Parser)]
@@ -642,12 +660,9 @@ fn main() {
     spawn(async move {
         println!("I am an async function!");
 
-        let inner = EXECUTOR.with(move |exec| Rc::clone(&exec));
-
-        let nop_result = SqeFuture::nop(&inner.borrow()).await;
+        let nop_result = SqeFuture::nop().await;
         println!("CQE result: {nop_result:#?}");
         let socket_result = SqeFuture::socket(
-            &inner.borrow(),
             AddressFamily::Inet as i32,
             SockType::Stream as i32,
             SockProtocol::Tcp as i32,
@@ -661,7 +676,6 @@ fn main() {
         let addr = SockaddrIn::from_str(&format!("{}:{}", host, port)).unwrap();
 
         let connect_result = SqeFuture::connect(
-            &inner.borrow(),
             socket_result.res,
             addr.as_ptr() as *const liburing_sys::sockaddr,
             addr.len(),
@@ -671,13 +685,12 @@ fn main() {
 
         let msg = "Hello io_uring world!\n";
 
-        let send_result =
-            SqeFuture::send(&inner.borrow(), socket_result.res, msg.as_bytes(), 0).await;
+        let send_result = SqeFuture::send(socket_result.res, msg.as_bytes(), 0).await;
         println!("CQE result: {send_result:#?}");
     });
 
-    EXECUTOR.with(move |exec| {
-        exec.borrow().run();
+    Handle::current().with_exec(|exec| {
+        exec.run();
     });
 
     return;
