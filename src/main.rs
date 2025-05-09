@@ -390,6 +390,12 @@ impl Executor {
     }
 }
 
+pub fn spawn(future: impl Future<Output = ()> + 'static) {
+    EXECUTOR.with_borrow(move |exec| {
+        exec.clone().borrow().spawn(future);
+    });
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -623,43 +629,45 @@ struct Cli {
 //}
 
 fn main() {
+    spawn(async move {
+        println!("I am an async function!");
+
+        let inner = EXECUTOR.with_borrow(move |exec| Rc::clone(&exec));
+
+        let nop_result = SqeFuture::nop(&inner.borrow()).await;
+        println!("CQE result: {nop_result:#?}");
+        let socket_result = SqeFuture::socket(
+            &inner.borrow(),
+            AddressFamily::Inet as i32,
+            SockType::Stream as i32,
+            SockProtocol::Tcp as i32,
+            0,
+        )
+        .await;
+        println!("CQE result: {socket_result:#?}");
+
+        let host = "127.0.0.1";
+        let port = 8080;
+        let addr = SockaddrIn::from_str(&format!("{}:{}", host, port)).unwrap();
+
+        let connect_result = SqeFuture::connect(
+            &inner.borrow(),
+            socket_result.res,
+            addr.as_ptr() as *const liburing_sys::sockaddr,
+            addr.len(),
+        )
+        .await;
+        println!("CQE result: {connect_result:#?}");
+
+        let msg = "Hello io_uring world!\n";
+
+        let send_result =
+            SqeFuture::send(&inner.borrow(), socket_result.res, msg.as_bytes(), 0).await;
+        println!("CQE result: {send_result:#?}");
+    });
+
     EXECUTOR.with_borrow(move |exec| {
-        let inner = exec.clone();
-        exec.clone().borrow().spawn(async move {
-            println!("I am an async function!");
-
-            let nop_result = SqeFuture::nop(&inner.borrow()).await;
-            println!("CQE result: {nop_result:#?}");
-            let socket_result = SqeFuture::socket(
-                &inner.borrow(),
-                AddressFamily::Inet as i32,
-                SockType::Stream as i32,
-                SockProtocol::Tcp as i32,
-                0,
-            )
-            .await;
-            println!("CQE result: {socket_result:#?}");
-
-            let host = "127.0.0.1";
-            let port = 8080;
-            let addr = SockaddrIn::from_str(&format!("{}:{}", host, port)).unwrap();
-
-            let connect_result = SqeFuture::connect(
-                &inner.borrow(),
-                socket_result.res,
-                addr.as_ptr() as *const liburing_sys::sockaddr,
-                addr.len(),
-            )
-            .await;
-            println!("CQE result: {connect_result:#?}");
-
-            let msg = "Hello io_uring world!\n";
-
-            let send_result =
-                SqeFuture::send(&inner.borrow(), socket_result.res, msg.as_bytes(), 0).await;
-            println!("CQE result: {send_result:#?}");
-        });
-        exec.clone().borrow().run();
+        exec.borrow().run();
     });
 
     return;
