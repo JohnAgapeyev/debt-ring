@@ -333,8 +333,19 @@ impl Executor {
         self.future_map.borrow_mut().insert(task.0, future);
         self.task_queue.borrow_mut().push_back(task.0);
     }
+    fn should_continue_running(&self) -> bool {
+        //This function may change in the future, but for now is a good heuristic
+        self.task_map.borrow().is_empty()
+            && self.future_map.borrow().is_empty()
+            && self.task_queue.borrow().is_empty()
+    }
     pub fn run(&self) {
         loop {
+            if self.should_continue_running() {
+                println!("No more work available for the runtime");
+                return;
+            }
+
             let mut map = self.future_map.borrow_mut();
             while let Some(task) = self.task_queue.borrow_mut().pop_front() {
                 let future = map
@@ -357,15 +368,16 @@ impl Executor {
                     println!("Got a CQE: {:#?}", cqe);
                     println!("Waking task: {:#?}", task_id);
 
-                    let task_map_binding = self.task_map.borrow();
-
-                    let task = task_map_binding
-                        .get(&task_id)
+                    let task = self
+                        .task_map
+                        .borrow_mut()
+                        .remove(&task_id)
                         .expect("CQE user_data doesn't exist in the task map!");
 
-                    task.borrow_mut().completed = true;
-                    task.borrow_mut().cqe = Some(*cqe);
-                    task.borrow_mut()
+                    let mut task_binding = task.borrow_mut();
+                    task_binding.completed = true;
+                    task_binding.cqe = Some(*cqe);
+                    task_binding
                         .waker
                         .as_ref()
                         .expect("Got a completed task with no waker!")
