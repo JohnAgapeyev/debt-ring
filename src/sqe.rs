@@ -137,4 +137,8 @@ impl NopFuture {
             inner: SqeFuture::nop(),
         }
     }
+    #[must_use]
+    pub async fn do_nop() -> StrippedCqe {
+        SqeFuture::nop().await
+    }
 }

@@ -259,6 +259,9 @@ fn main() {
         let nop_result = NopFuture::new().await;
         println!("CQE result: {nop_result:#?}");
 
+        let nop_result = NopFuture::do_nop().await;
+        println!("CQE result: {nop_result:#?}");
+
         let socket_result = SqeFuture::socket(
             AddressFamily::Inet as i32,
             SockType::Stream as i32,
