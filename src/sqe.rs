@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
@@ -10,7 +10,9 @@ use crate::handle::Handle;
 use crate::task::*;
 
 use liburing_sys::*;
+use pin_project::pin_project;
 
+#[derive(Debug, Clone)]
 pub struct SqeFuture {
     pub shared: Rc<RefCell<SqeFutureShared>>,
 }
@@ -112,5 +114,27 @@ impl SqeFuture {
             exec.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
             fut
         })
+    }
+}
+
+#[pin_project]
+pub struct NopFuture {
+    #[pin]
+    inner: SqeFuture,
+}
+impl Future for NopFuture {
+    type Output = StrippedCqe;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.inner.poll(cx)
+    }
+}
+
+impl NopFuture {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: SqeFuture::nop(),
+        }
     }
 }
