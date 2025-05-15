@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::io::Error;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::net::SocketAddr;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
@@ -12,6 +13,9 @@ use crate::handle::Handle;
 use crate::task::*;
 
 use liburing_sys::*;
+use nix::sys::socket::{
+    AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike, SockaddrStorage,
+};
 
 #[derive(Debug, Clone)]
 #[must_use = "Futures do nothing if not awaited"]
@@ -110,13 +114,16 @@ impl SqeFuture {
         let fd = unsafe { OwnedFd::from_raw_fd(cqe.res) };
         Ok(fd)
     }
-    pub async fn connect(
-        sockfd: i32,
-        addr: *const sockaddr,
-        addrlen: socklen_t,
-    ) -> Result<(), Error> {
+    pub async fn connect(sockfd: &impl AsRawFd, addr: SocketAddr) -> Result<(), Error> {
+        let addr_storage = SockaddrStorage::from(addr);
+
         let cqe = Self::prep_and_register(move |sqe| unsafe {
-            io_uring_prep_connect(sqe, sockfd, addr, addrlen);
+            io_uring_prep_connect(
+                sqe,
+                sockfd.as_raw_fd(),
+                addr_storage.as_ptr() as *const liburing_sys::sockaddr,
+                SockaddrStorage::size(),
+            );
         })
         .await;
         if cqe.res < 0 {
@@ -126,16 +133,38 @@ impl SqeFuture {
         assert!(cqe.flags.is_empty());
         Ok(())
     }
-    pub async fn send(sockfd: i32, buf: &[u8], flags: i32) -> Result<usize, Error> {
-        let cqe = Self::prep_and_register(move |sqe| unsafe {
-            io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
-        })
-        .await;
+    //pub async fn send(sockfd: impl AsRawFd, buf: &[u8], flags: i32) -> Result<usize, Error> {
+    pub fn send(sockfd: impl AsRawFd, buf: &[u8], flags: i32) -> Self {
+        //let cqe = Self::prep_and_register(move |sqe| unsafe {
+        //    io_uring_prep_send(
+        //        sqe,
+        //        sockfd.as_raw_fd(),
+        //        buf.as_ptr() as *const c_void,
+        //        buf.len(),
+        //        flags,
+        //    );
+        //})
+        //.await;
 
-        if cqe.res < 0 {
-            return Err(Error::from_raw_os_error(-cqe.res));
-        }
-        assert!(cqe.flags.is_empty());
-        Ok(cqe.res.try_into().unwrap())
+        //if cqe.res < 0 {
+        //    return Err(Error::from_raw_os_error(-cqe.res));
+        //}
+        //assert!(cqe.flags.is_empty());
+        //Ok(cqe.res.try_into().unwrap())
+
+        Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_send(
+                sqe,
+                sockfd.as_raw_fd(),
+                buf.as_ptr() as *const c_void,
+                buf.len(),
+                flags,
+            );
+        })
+    }
+    pub fn close(sockfd: impl AsRawFd) -> Self {
+        Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_close(sqe, sockfd.as_raw_fd());
+        })
     }
 }

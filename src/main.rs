@@ -1,6 +1,8 @@
+use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::str::FromStr;
 
+use futures::AsyncWriteExt;
 use nix::sys::socket::{AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike};
 
 use clap::Parser;
@@ -269,25 +271,23 @@ fn main() {
         println!("CQE result: {socket_result:#?}");
 
         let owned_sock = socket_result.unwrap();
-        let sock = owned_sock.as_raw_fd();
-        println!("Sock: {sock}");
 
         let host = "127.0.0.1";
         let port = 8080;
-        let addr = SockaddrIn::from_str(&format!("{}:{}", host, port)).unwrap();
+        let addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
 
-        let connect_result = SqeFuture::connect(
-            sock,
-            addr.as_ptr() as *const liburing_sys::sockaddr,
-            addr.len(),
-        )
-        .await;
+        let connect_result = SqeFuture::connect(&owned_sock, addr).await;
         println!("Connect CQE result: {connect_result:#?}");
 
         let msg = "Hello io_uring world!\n";
 
-        let send_result = SqeFuture::send(sock, msg.as_bytes(), 0).await;
+        let send_result = SqeFuture::send(owned_sock.as_raw_fd(), msg.as_bytes(), 0).await;
         println!("Send CQE result: {send_result:#?}");
+
+        let mut tcp = TcpStream::new().await;
+        tcp.connect(addr).await.unwrap();
+        let write_result = tcp.write_all(msg.as_bytes()).await;
+        println!("TCP Write result: {write_result:#?}");
     });
 
     Handle::current().with_exec(|exec| {
