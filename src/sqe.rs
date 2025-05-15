@@ -1,7 +1,9 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
-use std::pin::{Pin, pin};
+use std::io::Error;
+use std::os::fd::{FromRawFd, OwnedFd};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
@@ -10,9 +12,9 @@ use crate::handle::Handle;
 use crate::task::*;
 
 use liburing_sys::*;
-use pin_project::pin_project;
 
 #[derive(Debug, Clone)]
+#[must_use = "Futures do nothing if not awaited"]
 pub struct SqeFuture {
     pub shared: Rc<RefCell<SqeFutureShared>>,
 }
@@ -67,78 +69,73 @@ impl SqeFuture {
             })),
         }
     }
-    #[must_use]
-    pub fn nop() -> SqeFuture {
+    fn prep_and_register<F>(prep_fn: F) -> Self
+    where
+        F: Fn(&mut io_uring_sqe),
+    {
         Handle::current().with_exec(|exec| {
             let fut = SqeFuture::new();
             let sqe = exec.get_sqe();
-            unsafe {
-                io_uring_prep_nop(sqe);
-            }
+            prep_fn(sqe);
             exec.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
             fut
         })
     }
-    #[must_use]
-    pub fn socket(domain: i32, sock_type: i32, protocol: i32, flags: u32) -> SqeFuture {
-        Handle::current().with_exec(|exec| {
-            let fut = SqeFuture::new();
-            let sqe = exec.get_sqe();
-            unsafe {
-                io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
-            }
-            exec.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
-            fut
-        })
-    }
-    #[must_use]
-    pub fn connect(sockfd: i32, addr: *const sockaddr, addrlen: socklen_t) -> SqeFuture {
-        Handle::current().with_exec(|exec| {
-            let fut = SqeFuture::new();
-            let sqe = exec.get_sqe();
-            unsafe {
-                io_uring_prep_connect(sqe, sockfd, addr, addrlen);
-            }
-            exec.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
-            fut
-        })
-    }
-    #[must_use]
-    pub fn send(sockfd: i32, buf: &[u8], flags: i32) -> SqeFuture {
-        Handle::current().with_exec(|exec| {
-            let fut = SqeFuture::new();
-            let sqe = exec.get_sqe();
-            unsafe {
-                io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
-            }
-            exec.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
-            fut
-        })
-    }
-}
 
-#[pin_project]
-pub struct NopFuture {
-    #[pin]
-    inner: SqeFuture,
-}
-impl Future for NopFuture {
-    type Output = StrippedCqe;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        this.inner.poll(cx)
-    }
-}
-
-impl NopFuture {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: SqeFuture::nop(),
+    pub async fn nop() -> Result<(), Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_nop(sqe);
+        })
+        .await;
+        if cqe.res != 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
         }
+        assert!(cqe.flags.is_empty());
+        Ok(())
     }
-    #[must_use]
-    pub async fn do_nop() -> StrippedCqe {
-        SqeFuture::nop().await
+    pub async fn socket(
+        domain: i32,
+        sock_type: i32,
+        protocol: i32,
+        flags: u32,
+    ) -> Result<OwnedFd, Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_socket(sqe, domain, sock_type, protocol, flags);
+        })
+        .await;
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.flags.is_empty());
+        let fd = unsafe { OwnedFd::from_raw_fd(cqe.res) };
+        Ok(fd)
+    }
+    pub async fn connect(
+        sockfd: i32,
+        addr: *const sockaddr,
+        addrlen: socklen_t,
+    ) -> Result<(), Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_connect(sqe, sockfd, addr, addrlen);
+        })
+        .await;
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.res == 0);
+        assert!(cqe.flags.is_empty());
+        Ok(())
+    }
+    pub async fn send(sockfd: i32, buf: &[u8], flags: i32) -> Result<usize, Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_send(sqe, sockfd, buf.as_ptr() as *const c_void, buf.len(), flags);
+        })
+        .await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.flags.is_empty());
+        Ok(cqe.res.try_into().unwrap())
     }
 }

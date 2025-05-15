@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::str::FromStr;
 
 use nix::sys::socket::{AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike};
@@ -12,10 +13,12 @@ mod handle;
 mod ring;
 mod sqe;
 mod task;
+mod tcp;
 
 use crate::executor::*;
 use crate::handle::*;
 use crate::sqe::*;
+use crate::tcp::*;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -256,12 +259,6 @@ fn main() {
         let nop_result = SqeFuture::nop().await;
         println!("CQE result: {nop_result:#?}");
 
-        let nop_result = NopFuture::new().await;
-        println!("CQE result: {nop_result:#?}");
-
-        let nop_result = NopFuture::do_nop().await;
-        println!("CQE result: {nop_result:#?}");
-
         let socket_result = SqeFuture::socket(
             AddressFamily::Inet as i32,
             SockType::Stream as i32,
@@ -271,22 +268,26 @@ fn main() {
         .await;
         println!("CQE result: {socket_result:#?}");
 
+        let owned_sock = socket_result.unwrap();
+        let sock = owned_sock.as_raw_fd();
+        println!("Sock: {sock}");
+
         let host = "127.0.0.1";
         let port = 8080;
         let addr = SockaddrIn::from_str(&format!("{}:{}", host, port)).unwrap();
 
         let connect_result = SqeFuture::connect(
-            socket_result.res,
+            sock,
             addr.as_ptr() as *const liburing_sys::sockaddr,
             addr.len(),
         )
         .await;
-        println!("CQE result: {connect_result:#?}");
+        println!("Connect CQE result: {connect_result:#?}");
 
         let msg = "Hello io_uring world!\n";
 
-        let send_result = SqeFuture::send(socket_result.res, msg.as_bytes(), 0).await;
-        println!("CQE result: {send_result:#?}");
+        let send_result = SqeFuture::send(sock, msg.as_bytes(), 0).await;
+        println!("Send CQE result: {send_result:#?}");
     });
 
     Handle::current().with_exec(|exec| {
