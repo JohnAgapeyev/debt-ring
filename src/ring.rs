@@ -19,11 +19,43 @@ impl Ring {
         cq_buf.resize_with(entries as usize, std::ptr::null_mut);
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
-            match io_uring_queue_init(entries, &mut ring, flags) {
-                0 => Ok(Ring {
-                    inner: RefCell::new(ring),
-                    cq_buf: RefCell::new(cq_buf),
-                }),
+            let mut params: io_uring_params = std::mem::zeroed();
+            params.flags = flags;
+            match io_uring_queue_init_params(entries, &mut ring, &mut params) {
+                0 => {
+                    /*
+                     * IORING_FEAT_SUBMIT_STABLE allows the key assumption that memory only
+                     * has to survive until submit. Without it, the lifetimes get much more
+                     * complicated to manage.
+                     * 5.10 LTS is EOL as of December 2026, and I'm not going to finish the
+                     * bulk of the work required here before then, so no point supporting
+                     * something so complicated that won't matter for anything I will ever
+                     * need to do
+                     *
+                     * man io_uring_queue_init(3):
+                     *
+                     * If this flag is set, applications can be certain that any data
+                     * for async offload has been consumed when the kernel has consumed the SQE.
+                     * Available since kernel 5.5.
+                     *
+                     * man io_uring_submit(3):
+                     *
+                     * For any request that passes in data in a struct,
+                     * that data must remain valid until the request has been successfully submitted.
+                     * It need not remain valid until completion.
+                     * Once a request has been submitted, the in-kernel state is stable.
+                     * Very early kernels (5.4 and earlier) required state to be stable until the completion occurred.
+                     * Applications can test for this behavior by inspecting
+                     * the IORING_FEAT_SUBMIT_STABLE flag passed back from io_uring_queue_init_params(3).
+                     */
+                    if (params.features & IORING_FEAT_SUBMIT_STABLE) == 0 {
+                        panic!("Kernel doesn't support IORING_FEAT_SUBMIT_STABLE!");
+                    }
+                    Ok(Ring {
+                        inner: RefCell::new(ring),
+                        cq_buf: RefCell::new(cq_buf),
+                    })
+                }
                 err => Err(Error::from_raw_os_error(-err)),
             }
         }
