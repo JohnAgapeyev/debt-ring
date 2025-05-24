@@ -149,9 +149,16 @@ impl SqeFuture {
         assert!(cqe.flags.is_empty());
         Ok(cqe.res.try_into().unwrap())
     }
-    pub fn close(sockfd: impl AsRawFd) -> Self {
-        Self::prep_and_register(move |sqe| unsafe {
+    pub async fn close(sockfd: impl AsRawFd) -> Result<(), Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
             io_uring_prep_close(sqe, sockfd.as_raw_fd());
         })
+        .await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.flags.is_empty());
+        Ok(())
     }
 }
