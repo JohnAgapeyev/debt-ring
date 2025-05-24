@@ -131,6 +131,25 @@ impl SqeFuture {
         assert!(cqe.flags.is_empty());
         Ok(())
     }
+    pub async fn bind(sockfd: &impl AsRawFd, addr: SocketAddr) -> Result<(), Error> {
+        let addr_storage = SockaddrStorage::from(addr);
+
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_bind(
+                sqe,
+                sockfd.as_raw_fd(),
+                addr_storage.as_ptr() as *mut liburing_sys::sockaddr,
+                SockaddrStorage::size(),
+            );
+        })
+        .await;
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.res == 0);
+        assert!(cqe.flags.is_empty());
+        Ok(())
+    }
     pub async fn send(sockfd: &impl AsRawFd, buf: &[u8], flags: i32) -> Result<usize, Error> {
         let cqe = Self::prep_and_register(move |sqe| unsafe {
             io_uring_prep_send(
@@ -158,6 +177,82 @@ impl SqeFuture {
         if cqe.res < 0 {
             return Err(Error::from_raw_os_error(-cqe.res));
         }
+        assert!(cqe.flags.is_empty());
+        Ok(())
+    }
+    pub async fn listen(sockfd: &impl AsRawFd, backlog: i32) -> Result<(), Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_listen(sqe, sockfd.as_raw_fd(), backlog);
+        })
+        .await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.res == 0);
+        assert!(cqe.flags.is_empty());
+        Ok(())
+    }
+    pub async fn accept(
+        sockfd: &impl AsRawFd,
+        flags: i32,
+    ) -> Result<(OwnedFd, SockaddrStorage), Error> {
+        let mut recv_addr: liburing_sys::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut recv_addr_size: u32 = std::mem::size_of::<liburing_sys::sockaddr_storage>()
+            .try_into()
+            .unwrap();
+
+        let addr_ptr = std::ptr::addr_of_mut!(recv_addr) as *mut liburing_sys::sockaddr;
+        let addr_size_ptr = std::ptr::addr_of_mut!(recv_addr_size);
+
+        let cqe = Self::prep_and_register(|sqe| unsafe {
+            io_uring_prep_accept(sqe, sockfd.as_raw_fd(), addr_ptr, addr_size_ptr, flags);
+        })
+        .await;
+
+        if cqe.res < 0 {
+            dbg!(cqe);
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+
+        let fd = unsafe { OwnedFd::from_raw_fd(cqe.res) };
+        dbg!(recv_addr_size);
+        let addr = unsafe {
+            SockaddrStorage::from_raw(addr_ptr as *const nix::libc::sockaddr, Some(recv_addr_size))
+        }
+        .unwrap();
+        Ok((fd, addr))
+    }
+    pub async fn setsockopt(
+        sockfd: &impl AsRawFd,
+        level: i32,
+        optname: i32,
+        optval: *mut c_void,
+        optlen: i32,
+    ) -> Result<(), Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            dbg!(level);
+            dbg!(optname);
+            dbg!(optval);
+            dbg!(optlen);
+            io_uring_prep_cmd_sock(
+                sqe,
+                io_uring_socket_op_SOCKET_URING_OP_SETSOCKOPT
+                    .try_into()
+                    .unwrap(),
+                sockfd.as_raw_fd(),
+                level,
+                optname,
+                optval,
+                optlen,
+            );
+        })
+        .await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.res == 0);
         assert!(cqe.flags.is_empty());
         Ok(())
     }

@@ -288,6 +288,15 @@ fn main() {
         tcp.connect(addr).await.unwrap();
         let write_result = tcp.write(msg.as_bytes()).await;
         println!("TCP Write result: {write_result:#?}");
+
+        let listen_host = "127.0.0.1";
+        let listen_port = 8081;
+        let listen_addr = SocketAddr::from_str(&format!("{}:{}", listen_host, listen_port)).unwrap();
+
+        let listener = TcpListener::bind(listen_addr).await.unwrap();
+        let (new_tcp, _) = listener.accept().await.unwrap();
+        let write_result = new_tcp.write(msg.as_bytes()).await;
+        println!("TCP Accepted Write result: {write_result:#?}");
     });
 
     Handle::current().with_exec(|exec| {

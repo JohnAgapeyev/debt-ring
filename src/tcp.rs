@@ -1,5 +1,5 @@
 use std::io::Error;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::pin::{Pin, pin};
 use std::task::{Context, Poll, ready};
@@ -8,7 +8,10 @@ use crate::sqe::SqeFuture;
 
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
+use liburing_sys::SO_REUSEADDR;
+use liburing_sys::SOL_SOCKET;
 use nix::sys::socket::{AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike};
+use std::ffi::c_void;
 
 /*
  * I don't like the current situation with handling state around the AsyncRead/AsyncWrite trait
@@ -64,6 +67,10 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
+    pub(crate) fn from_raw(sock: OwnedFd) -> Self {
+        Self { sock }
+    }
+
     pub async fn new() -> Self {
         let sock = SqeFuture::socket(
             AddressFamily::Inet as i32,
@@ -82,5 +89,48 @@ impl TcpStream {
     }
     pub async fn write(&self, buf: &[u8]) -> Result<usize, Error> {
         SqeFuture::send(&self.sock, buf, 0).await
+    }
+}
+
+pub struct TcpListener {
+    sock: OwnedFd,
+}
+
+impl TcpListener {
+    pub async fn bind(addr: SocketAddr) -> Result<Self, Error> {
+        let sock = SqeFuture::socket(
+            AddressFamily::Inet as i32,
+            SockType::Stream as i32,
+            SockProtocol::Tcp as i32,
+            0,
+        )
+        .await?;
+
+        //tokio sets SO_REUSEADDR as part of the bind call
+        let mut enable = 1;
+        let flag_size = 4;
+
+        SqeFuture::setsockopt(
+            &sock,
+            SOL_SOCKET.try_into().unwrap(),
+            SO_REUSEADDR.try_into().unwrap(),
+            &mut enable as *mut _ as *mut c_void,
+            flag_size,
+        )
+        .await?;
+
+        SqeFuture::bind(&sock, addr).await?;
+        SqeFuture::listen(&sock, 32).await?;
+
+        Ok(TcpListener { sock })
+    }
+
+    pub async fn accept(&self) -> Result<(TcpStream, SocketAddr), Error> {
+        let (fd, addr) = SqeFuture::accept(&self.sock, 0).await?;
+
+        let inet_addr = addr.as_sockaddr_in().unwrap();
+        let std_addr = SocketAddrV4::new(inet_addr.ip(), inet_addr.port());
+
+        Ok((TcpStream::from_raw(fd), SocketAddr::from(std_addr)))
     }
 }
