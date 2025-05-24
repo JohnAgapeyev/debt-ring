@@ -100,7 +100,6 @@ impl Executor {
                         .expect("CQE user_data doesn't exist in the task map!");
 
                     let mut task_binding = task.borrow_mut();
-                    task_binding.completed = true;
                     task_binding.cqe = Some(*cqe);
                     task_binding
                         .waker

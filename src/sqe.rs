@@ -27,7 +27,6 @@ pub struct SqeFuture {
 pub struct SqeFutureShared {
     pub waker: Option<Waker>,
     pub cqe: Option<StrippedCqe>,
-    pub completed: bool,
 }
 
 /*
@@ -47,7 +46,7 @@ impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut shared = self.shared.borrow_mut();
-        if !shared.completed {
+        if shared.cqe.is_none() {
             if let Some(wake) = &mut shared.waker {
                 wake.clone_from(cx.waker());
             } else {
@@ -69,7 +68,6 @@ impl SqeFuture {
             shared: Rc::new(RefCell::new(SqeFutureShared {
                 waker: None,
                 cqe: None,
-                completed: false,
             })),
         }
     }
