@@ -281,12 +281,12 @@ fn main() {
 
         let msg = "Hello io_uring world!\n";
 
-        let send_result = SqeFuture::send(owned_sock.as_raw_fd(), msg.as_bytes(), 0).await;
+        let send_result = SqeFuture::send(&owned_sock, msg.as_bytes(), 0).await;
         println!("Send CQE result: {send_result:#?}");
 
         let mut tcp = TcpStream::new().await;
         tcp.connect(addr).await.unwrap();
-        let write_result = tcp.write_all(msg.as_bytes()).await;
+        let write_result = tcp.write(msg.as_bytes()).await;
         println!("TCP Write result: {write_result:#?}");
     });
 

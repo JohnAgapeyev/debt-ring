@@ -131,26 +131,8 @@ impl SqeFuture {
         assert!(cqe.flags.is_empty());
         Ok(())
     }
-    //pub async fn send(sockfd: impl AsRawFd, buf: &[u8], flags: i32) -> Result<usize, Error> {
-    pub fn send(sockfd: impl AsRawFd, buf: &[u8], flags: i32) -> Self {
-        //let cqe = Self::prep_and_register(move |sqe| unsafe {
-        //    io_uring_prep_send(
-        //        sqe,
-        //        sockfd.as_raw_fd(),
-        //        buf.as_ptr() as *const c_void,
-        //        buf.len(),
-        //        flags,
-        //    );
-        //})
-        //.await;
-
-        //if cqe.res < 0 {
-        //    return Err(Error::from_raw_os_error(-cqe.res));
-        //}
-        //assert!(cqe.flags.is_empty());
-        //Ok(cqe.res.try_into().unwrap())
-
-        Self::prep_and_register(move |sqe| unsafe {
+    pub async fn send(sockfd: &impl AsRawFd, buf: &[u8], flags: i32) -> Result<usize, Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
             io_uring_prep_send(
                 sqe,
                 sockfd.as_raw_fd(),
@@ -159,6 +141,13 @@ impl SqeFuture {
                 flags,
             );
         })
+        .await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.flags.is_empty());
+        Ok(cqe.res.try_into().unwrap())
     }
     pub fn close(sockfd: impl AsRawFd) -> Self {
         Self::prep_and_register(move |sqe| unsafe {
