@@ -65,7 +65,6 @@ impl Ring {
             match io_uring_get_sqe(self.inner.as_ptr()).as_mut() {
                 Some(sqe) => {
                     let task_id = get_next_task_id().into_id();
-                    println!("Creating SQE with ID: {task_id}");
                     io_uring_sqe_set_data64(sqe, task_id);
                     sqe
                 }

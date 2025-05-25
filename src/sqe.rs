@@ -183,7 +183,7 @@ impl SqeFuture {
         if cqe.res < 0 {
             return Err(Error::from_raw_os_error(-cqe.res));
         }
-        assert!(cqe.flags.is_empty());
+        //The SOCK_NONEMPTY flag may be set here, worth being aware of
         Ok(cqe.res.try_into().unwrap())
     }
     pub async fn close(sockfd: impl AsRawFd) -> Result<(), Error> {

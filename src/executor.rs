@@ -67,7 +67,6 @@ impl Executor {
     pub fn run(&self) {
         loop {
             if self.should_continue_running() {
-                println!("No more work available for the runtime");
                 return;
             }
 
@@ -84,15 +83,10 @@ impl Executor {
                 }
             }
             //No work in the queue to be done
-            println!("No work in the queue!");
-
             match self
                 .ring
                 .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
                     //Got a CQE to process
-                    println!("Got a CQE: {:#?}", cqe);
-                    println!("Waking task: {:#?}", task_id);
-
                     let task = self
                         .task_map
                         .borrow_mut()
@@ -106,15 +100,12 @@ impl Executor {
                         .as_ref()
                         .expect("Got a completed task with no waker!")
                         .wake_by_ref();
-
-                    println!("Done with task: {:#?}", task_id);
                 }) {
                 Ok(_) => (),
                 Err(e) => {
                     let inner = e.raw_os_error().unwrap();
                     //62 is ETIME errno value
                     if inner == 62 {
-                        println!("No more CQEs");
                         continue;
                     }
                     panic!("Got an unknown error: {}", inner);
