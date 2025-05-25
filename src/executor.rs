@@ -70,17 +70,29 @@ impl Executor {
                 return;
             }
 
-            let mut map = self.future_map.borrow_mut();
-            while let Some(task_id) = self.task_queue.borrow_mut().pop_front() {
-                let future = map
-                    .get_mut(&task_id)
-                    .expect(&format!("Task queue contained an ID not in the future map: {task_id}"));
-
-                let waker = Waker::from(Arc::new(Task::new(task_id)));
-                let context = &mut Context::from_waker(&waker);
-                if future.as_mut().poll(context).is_ready() {
-                    map.remove(&task_id);
+            while !self.task_queue.borrow().is_empty() {
+                let front_entry = self.task_queue.borrow_mut().pop_front();
+                if front_entry.is_none() {
+                    break;
                 }
+                match front_entry {
+                    None => break,
+                    Some(task_id) => {
+                        let mut future =
+                            self.future_map
+                                .borrow_mut()
+                                .remove(&task_id)
+                                .expect(&format!(
+                                    "Task queue contained an ID not in the future map: {task_id}"
+                                ));
+
+                        let waker = Waker::from(Arc::new(Task::new(task_id)));
+                        let context = &mut Context::from_waker(&waker);
+                        if future.as_mut().poll(context).is_pending() {
+                            self.future_map.borrow_mut().insert(task_id, future);
+                        }
+                    }
+                };
             }
             //No work in the queue to be done
             match self

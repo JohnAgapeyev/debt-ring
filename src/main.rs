@@ -65,26 +65,30 @@ async fn server(host: String, port: u16) {
     let listen_addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
 
     let listener = TcpListener::bind(listen_addr).await.unwrap();
-    let (new_tcp, _) = listener.accept().await.unwrap();
-
-    let mut buf = [0u8; 4096];
-    let mut count = 0usize;
 
     loop {
-        let now = Instant::now();
-        count += 1;
+        let (new_tcp, _) = listener.accept().await.unwrap();
+        spawn(async move {
+            let mut buf = [0u8; 4096];
+            let mut count = 0usize;
 
-        let msg = "Hello io_uring world!\n";
+            loop {
+                let now = Instant::now();
+                count += 1;
 
-        let write_result = new_tcp.write(msg.as_bytes()).await.unwrap();
+                let msg = "Hello io_uring world!\n";
 
-        let read_result = new_tcp.read(&mut buf).await.unwrap();
+                let write_result = new_tcp.write(msg.as_bytes()).await.unwrap();
 
-        println!(
-            "Time taken was: {} for message {}",
-            now.elapsed().as_nanos(),
-            count
-        );
+                let read_result = new_tcp.read(&mut buf).await.unwrap();
+
+                println!(
+                    "Time taken was: {} for message {}",
+                    now.elapsed().as_nanos(),
+                    count
+                );
+            }
+        });
     }
 }
 
