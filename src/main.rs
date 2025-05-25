@@ -297,6 +297,11 @@ fn main() {
         let (new_tcp, _) = listener.accept().await.unwrap();
         let write_result = new_tcp.write(msg.as_bytes()).await;
         println!("TCP Accepted Write result: {write_result:#?}");
+
+        let mut buf = [0u8; 4096];
+        let read_result = new_tcp.read(&mut buf).await.unwrap();
+        println!("TCP Accepted Read result: {read_result:#?}");
+        println!("TCP Accepted Read contents: {:#?}", str::from_utf8(&buf[0..read_result]).unwrap());
     });
 
     Handle::current().with_exec(|exec| {

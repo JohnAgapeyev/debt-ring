@@ -90,6 +90,9 @@ impl TcpStream {
     pub async fn write(&self, buf: &[u8]) -> Result<usize, Error> {
         SqeFuture::send(&self.sock, buf, 0).await
     }
+    pub async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        SqeFuture::recv(&self.sock, buf, 0).await
+    }
 }
 
 pub struct TcpListener {

@@ -168,6 +168,24 @@ impl SqeFuture {
         assert!(cqe.flags.is_empty());
         Ok(cqe.res.try_into().unwrap())
     }
+    pub async fn recv(sockfd: &impl AsRawFd, buf: &mut [u8], flags: i32) -> Result<usize, Error> {
+        let cqe = Self::prep_and_register(move |sqe| unsafe {
+            io_uring_prep_recv(
+                sqe,
+                sockfd.as_raw_fd(),
+                buf.as_ptr() as *mut c_void,
+                buf.len(),
+                flags,
+            );
+        })
+        .await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.flags.is_empty());
+        Ok(cqe.res.try_into().unwrap())
+    }
     pub async fn close(sockfd: impl AsRawFd) -> Result<(), Error> {
         let cqe = Self::prep_and_register(move |sqe| unsafe {
             io_uring_prep_close(sqe, sockfd.as_raw_fd());
