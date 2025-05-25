@@ -46,11 +46,11 @@ async fn client(host: String, port: u16) {
         let _ = tcp.write(msg.as_bytes()).await.unwrap();
         let _ = tcp.read(&mut buf).await.unwrap();
 
-        println!(
-            "Time taken was: {} for message {}",
-            now.elapsed().as_nanos(),
-            count
-        );
+        //println!(
+        //    "Time taken was: {} for message {}",
+        //    now.elapsed().as_nanos(),
+        //    count
+        //);
     }
 }
 
@@ -58,9 +58,12 @@ async fn server(host: String, port: u16) {
     let listen_addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
 
     let listener = TcpListener::bind(listen_addr).await.unwrap();
+    let mut connect_count = 0u64;
 
     loop {
         let (new_tcp, _) = listener.accept().await.unwrap();
+        connect_count += 1;
+        let inner_count = connect_count;
         spawn(async move {
             let mut buf = [0u8; 4096];
             let mut count = 0usize;
@@ -75,9 +78,10 @@ async fn server(host: String, port: u16) {
                 let _ = new_tcp.read(&mut buf).await.unwrap();
 
                 println!(
-                    "Time taken was: {} for message {}",
+                    "Time taken was: {} for message {} from connection: {}",
                     now.elapsed().as_nanos(),
-                    count
+                    count,
+                    inner_count,
                 );
             }
         });

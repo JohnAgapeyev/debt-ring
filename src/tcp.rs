@@ -119,7 +119,7 @@ impl TcpListener {
         .await?;
 
         SqeFuture::bind(&sock, addr).await?;
-        SqeFuture::listen(&sock, 32).await?;
+        SqeFuture::listen(&sock, 4096).await?;
 
         Ok(TcpListener { sock })
     }

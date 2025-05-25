@@ -227,12 +227,10 @@ impl SqeFuture {
         .await;
 
         if cqe.res < 0 {
-            dbg!(cqe);
             return Err(Error::from_raw_os_error(-cqe.res));
         }
 
         let fd = unsafe { OwnedFd::from_raw_fd(cqe.res) };
-        dbg!(recv_addr_size);
         let addr = unsafe {
             SockaddrStorage::from_raw(addr_ptr as *const nix::libc::sockaddr, Some(recv_addr_size))
         }
@@ -247,10 +245,6 @@ impl SqeFuture {
         optlen: i32,
     ) -> Result<(), Error> {
         let cqe = Self::prep_and_register(move |sqe| unsafe {
-            dbg!(level);
-            dbg!(optname);
-            dbg!(optval);
-            dbg!(optlen);
             io_uring_prep_cmd_sock(
                 sqe,
                 io_uring_socket_op_SOCKET_URING_OP_SETSOCKOPT
