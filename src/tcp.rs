@@ -1,16 +1,12 @@
 use std::io::Error;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::pin::{Pin, pin};
-use std::task::{Context, Poll, ready};
+use std::os::fd::OwnedFd;
 
 use crate::sqe::SqeFuture;
 
-use futures::FutureExt;
-use futures::future::LocalBoxFuture;
 use liburing_sys::SO_REUSEADDR;
 use liburing_sys::SOL_SOCKET;
-use nix::sys::socket::{AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike};
+use nix::sys::socket::{AddressFamily, SockProtocol, SockType};
 use std::ffi::c_void;
 
 /*

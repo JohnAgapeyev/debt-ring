@@ -13,9 +13,7 @@ use crate::handle::Handle;
 use crate::task::*;
 
 use liburing_sys::*;
-use nix::sys::socket::{
-    AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike, SockaddrStorage,
-};
+use nix::sys::socket::{SockaddrLike, SockaddrStorage};
 
 #[derive(Debug, Clone)]
 #[must_use = "Futures do nothing if not awaited"]

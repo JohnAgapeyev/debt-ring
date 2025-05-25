@@ -1,14 +1,8 @@
 use std::net::SocketAddr;
-use std::os::fd::AsRawFd;
 use std::str::FromStr;
 use std::time::Instant;
 
-use futures::AsyncWriteExt;
-use nix::sys::socket::{AddressFamily, SockProtocol, SockType, SockaddrIn, SockaddrLike};
-
 use clap::Parser;
-
-use liburing_sys::*;
 
 mod cqe;
 mod executor;
@@ -49,9 +43,8 @@ async fn client(host: String, port: u16) {
 
         let msg = "Hello io_uring world!\n";
 
-        let write_result = tcp.write(msg.as_bytes()).await.unwrap();
-
-        let read_result = tcp.read(&mut buf).await.unwrap();
+        let _ = tcp.write(msg.as_bytes()).await.unwrap();
+        let _ = tcp.read(&mut buf).await.unwrap();
 
         println!(
             "Time taken was: {} for message {}",
@@ -78,9 +71,8 @@ async fn server(host: String, port: u16) {
 
                 let msg = "Hello io_uring world!\n";
 
-                let write_result = new_tcp.write(msg.as_bytes()).await.unwrap();
-
-                let read_result = new_tcp.read(&mut buf).await.unwrap();
+                let _ = new_tcp.write(msg.as_bytes()).await.unwrap();
+                let _ = new_tcp.read(&mut buf).await.unwrap();
 
                 println!(
                     "Time taken was: {} for message {}",
