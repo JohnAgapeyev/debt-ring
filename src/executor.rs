@@ -79,12 +79,9 @@ impl Executor {
                     None => break,
                     Some(task_id) => {
                         let mut future =
-                            self.future_map
-                                .borrow_mut()
-                                .remove(&task_id)
-                                .expect(&format!(
-                                    "Task queue contained an ID not in the future map: {task_id}"
-                                ));
+                            self.future_map.borrow_mut().remove(&task_id).expect(
+                                "Task queue contained an ID not in the future map: {task_id}",
+                            );
 
                         let waker = Waker::from(Arc::new(Task::new(task_id)));
                         let context = &mut Context::from_waker(&waker);
