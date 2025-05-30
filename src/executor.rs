@@ -20,7 +20,7 @@ use liburing_sys::*;
 pub(crate) struct Executor {
     ring: Ring,
 
-    task_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
+    sqe_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
     future_map: RefCell<HashMap<u64, LocalBoxFuture<'static, ()>>>,
 
     task_queue: RefCell<VecDeque<u64>>,
@@ -29,18 +29,18 @@ pub(crate) struct Executor {
 impl Executor {
     pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
         let ring = Ring::new(entries, flags)?;
-        let task_map = RefCell::new(HashMap::with_capacity(entries as usize));
+        let sqe_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let future_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let task_queue = RefCell::new(VecDeque::with_capacity(entries as usize));
         Ok(Executor {
             ring,
-            task_map,
+            sqe_map,
             future_map,
             task_queue,
         })
     }
     pub fn register_task(&self, task: Task, sqe: Rc<RefCell<SqeFutureShared>>) {
-        self.task_map.borrow_mut().insert(task.into_id(), sqe);
+        self.sqe_map.borrow_mut().insert(task.into_id(), sqe);
     }
     pub fn wake(&self, task: Task) {
         self.task_queue.borrow_mut().push_back(task.into_id());
@@ -60,7 +60,7 @@ impl Executor {
     }
     fn should_continue_running(&self) -> bool {
         //This function may change in the future, but for now is a good heuristic
-        self.task_map.borrow().is_empty()
+        self.sqe_map.borrow().is_empty()
             && self.future_map.borrow().is_empty()
             && self.task_queue.borrow().is_empty()
     }
@@ -97,7 +97,7 @@ impl Executor {
                 .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
                     //Got a CQE to process
                     let task = self
-                        .task_map
+                        .sqe_map
                         .borrow_mut()
                         .remove(&task_id)
                         .expect("CQE user_data doesn't exist in the task map!");
