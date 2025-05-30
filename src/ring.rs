@@ -1,22 +1,30 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Error;
+use std::rc::Rc;
 use std::time::Duration;
 
 use liburing_sys::*;
 
 use crate::cqe::StrippedCqe;
+use crate::sqe::SqeFutureShared;
 use crate::task::*;
 
 #[derive(Debug, Clone)]
 pub struct Ring {
-    pub inner: RefCell<io_uring>,
-    pub cq_buf: RefCell<Vec<*mut io_uring_cqe>>,
+    inner: RefCell<io_uring>,
+    cq_buf: RefCell<Vec<*mut io_uring_cqe>>,
+    sqe_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
 }
 
 impl Ring {
     pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
-        let mut cq_buf = Vec::with_capacity(entries as usize);
-        cq_buf.resize_with(entries as usize, std::ptr::null_mut);
+        let cq_buf = RefCell::new({
+            let mut v = Vec::with_capacity(entries as usize);
+            v.resize_with(entries as usize, std::ptr::null_mut);
+            v
+        });
+        let sqe_map = RefCell::new(HashMap::with_capacity(entries as usize));
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
             let mut params: io_uring_params = std::mem::zeroed();
@@ -53,12 +61,16 @@ impl Ring {
                     }
                     Ok(Ring {
                         inner: RefCell::new(ring),
-                        cq_buf: RefCell::new(cq_buf),
+                        cq_buf,
+                        sqe_map,
                     })
                 }
                 err => Err(Error::from_raw_os_error(-err)),
             }
         }
+    }
+    pub fn register_task(&self, task: Task, sqe: Rc<RefCell<SqeFutureShared>>) {
+        self.sqe_map.borrow_mut().insert(task.into_id(), sqe);
     }
     pub fn get_sqe(&self) -> &mut io_uring_sqe {
         unsafe {
@@ -90,14 +102,7 @@ impl Ring {
             }
         }
     }
-    pub fn submit_and_wait_timeout<F>(
-        &self,
-        timeout: Option<Duration>,
-        cqe_handler: F,
-    ) -> Result<i32, Error>
-    where
-        F: Fn(u64, &StrippedCqe),
-    {
+    pub fn submit_and_wait_timeout(&self, timeout: Option<Duration>) -> Result<i32, Error> {
         let mut cqe: *mut io_uring_cqe = std::ptr::null_mut();
 
         let mut local_ts = __kernel_timespec {
@@ -148,7 +153,21 @@ impl Ring {
                     assert!(!cqe.is_null());
                     let task_id = io_uring_cqe_get_data64(cqe);
                     let stripped = StrippedCqe::from(&*cqe);
-                    cqe_handler(task_id, &stripped);
+
+                    //Got a CQE to process
+                    let task = self
+                        .sqe_map
+                        .borrow_mut()
+                        .remove(&task_id)
+                        .expect("CQE user_data doesn't exist in the SQE map!");
+
+                    let mut task_binding = task.borrow_mut();
+                    task_binding.cqe = Some(stripped);
+                    task_binding
+                        .waker
+                        .as_ref()
+                        .expect("Got a completed task with no waker!")
+                        .wake_by_ref();
                 }
                 io_uring_cq_advance(self.inner.as_ptr(), nfilled);
             }

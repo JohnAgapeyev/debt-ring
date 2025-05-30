@@ -12,57 +12,36 @@ use std::time::Duration;
 
 use crate::handle::Handle;
 use crate::ring::Ring;
-use crate::sqe::SqeFutureShared;
 use crate::task::*;
 
-use liburing_sys::*;
-
 pub(crate) struct Executor {
-    ring: Ring,
-
-    sqe_map: RefCell<HashMap<u64, Rc<RefCell<SqeFutureShared>>>>,
+    ring: Rc<RefCell<Ring>>,
     future_map: RefCell<HashMap<u64, LocalBoxFuture<'static, ()>>>,
-
     task_queue: RefCell<VecDeque<u64>>,
 }
 
 impl Executor {
-    pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
-        let ring = Ring::new(entries, flags)?;
-        let sqe_map = RefCell::new(HashMap::with_capacity(entries as usize));
+    pub fn new(ring: Rc<RefCell<Ring>>, entries: u32) -> Result<Self, Error> {
         let future_map = RefCell::new(HashMap::with_capacity(entries as usize));
         let task_queue = RefCell::new(VecDeque::with_capacity(entries as usize));
         Ok(Executor {
             ring,
-            sqe_map,
             future_map,
             task_queue,
         })
     }
-    pub fn register_task(&self, task: Task, sqe: Rc<RefCell<SqeFutureShared>>) {
-        self.sqe_map.borrow_mut().insert(task.into_id(), sqe);
-    }
     pub fn wake(&self, task: Task) {
         self.task_queue.borrow_mut().push_back(task.into_id());
     }
-    pub fn get_sqe(&self) -> &mut io_uring_sqe {
-        self.ring.get_sqe()
-    }
-    pub fn submit(&self) -> Result<i32, Error> {
-        self.ring.submit()
-    }
     pub fn spawn(&self, future: impl Future<Output = ()> + 'static) {
         let future = future.boxed_local();
-
         let task = get_next_task_id();
         self.future_map.borrow_mut().insert(task.into_id(), future);
         self.task_queue.borrow_mut().push_back(task.into_id());
     }
     fn should_continue_running(&self) -> bool {
         //This function may change in the future, but for now is a good heuristic
-        self.sqe_map.borrow().is_empty()
-            && self.future_map.borrow().is_empty()
-            && self.task_queue.borrow().is_empty()
+        self.future_map.borrow().is_empty() && self.task_queue.borrow().is_empty()
     }
     pub fn run(&self) {
         loop {
@@ -94,22 +73,9 @@ impl Executor {
             //No work in the queue to be done
             match self
                 .ring
-                .submit_and_wait_timeout(Some(Duration::new(1, 0)), |task_id, cqe| {
-                    //Got a CQE to process
-                    let task = self
-                        .sqe_map
-                        .borrow_mut()
-                        .remove(&task_id)
-                        .expect("CQE user_data doesn't exist in the task map!");
-
-                    let mut task_binding = task.borrow_mut();
-                    task_binding.cqe = Some(*cqe);
-                    task_binding
-                        .waker
-                        .as_ref()
-                        .expect("Got a completed task with no waker!")
-                        .wake_by_ref();
-                }) {
+                .borrow()
+                .submit_and_wait_timeout(Some(Duration::new(1, 0)))
+            {
                 Ok(_) => (),
                 Err(e) => {
                     let inner = e.raw_os_error().unwrap();

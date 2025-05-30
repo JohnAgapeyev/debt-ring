@@ -9,7 +9,8 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use crate::cqe::StrippedCqe;
-use crate::handle::Handle;
+use crate::handle::RingHandle;
+use crate::ring::Ring;
 use crate::task::*;
 
 use liburing_sys::*;
@@ -61,23 +62,23 @@ impl Future for SqeFuture {
 }
 
 impl SqeFuture {
-    fn new() -> SqeFuture {
-        SqeFuture {
+    pub(crate) fn new() -> Self {
+        Self {
             shared: Rc::new(RefCell::new(SqeFutureShared {
                 waker: None,
                 cqe: None,
             })),
         }
     }
-    fn prep_and_register<F>(prep_fn: F) -> Self
+    pub(crate) fn prep_and_register<F>(prep_fn: F) -> Self
     where
         F: Fn(&mut io_uring_sqe),
     {
-        Handle::current().with_exec(|exec| {
+        RingHandle::current().with_ring(|ring| {
             let fut = SqeFuture::new();
-            let sqe = exec.get_sqe();
+            let sqe = ring.get_sqe();
             prep_fn(sqe);
-            exec.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
+            ring.register_task(Task::new(sqe.user_data), Rc::clone(&fut.shared));
             fut
         })
     }
