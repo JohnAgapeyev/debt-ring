@@ -265,3 +265,23 @@ impl SqeFuture {
         Ok(())
     }
 }
+
+pub struct Nop;
+
+impl Nop {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+pub trait SqeOp {
+    fn apply(self, sqe: &mut io_uring_sqe);
+}
+
+impl SqeOp for Nop {
+    fn apply(self, sqe: &mut io_uring_sqe) {
+        unsafe {
+            io_uring_prep_nop(sqe);
+        }
+    }
+}

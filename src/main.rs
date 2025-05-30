@@ -14,6 +14,7 @@ mod tcp;
 
 use crate::executor::*;
 use crate::handle::*;
+use crate::ring::*;
 use crate::sqe::*;
 use crate::tcp::*;
 
@@ -89,66 +90,78 @@ async fn server(host: String, port: u16) {
 }
 
 fn main() {
-    //spawn(async move {
-    //    println!("I am an async function!");
+    spawn(async move {
+        println!("I am an async function!");
 
-    //    let nop_result = SqeFuture::nop().await;
-    //    println!("CQE result: {nop_result:#?}");
+        let nop_result = SqeFuture::nop().await;
+        println!("CQE result: {nop_result:#?}");
 
-    //    let socket_result = SqeFuture::socket(
-    //        AddressFamily::Inet as i32,
-    //        SockType::Stream as i32,
-    //        SockProtocol::Tcp as i32,
-    //        0,
-    //    )
-    //    .await;
-    //    println!("CQE result: {socket_result:#?}");
+        let nop_future = RingHandle::current().with_ring(|ring| {
+            let nop = Nop::new();
+            ring.push_op(nop)
+        });
+        let nop_result = nop_future.await;
+        println!("CQE result: {nop_result:#?}");
 
-    //    let owned_sock = socket_result.unwrap();
+        let nop = Nop::new();
+        let nop_future = push_op(nop);
+        let nop_result = nop_future.await;
+        println!("CQE result: {nop_result:#?}");
 
-    //    let host = "127.0.0.1";
-    //    let port = 8080;
-    //    let addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
+        //let socket_result = SqeFuture::socket(
+        //    AddressFamily::Inet as i32,
+        //    SockType::Stream as i32,
+        //    SockProtocol::Tcp as i32,
+        //    0,
+        //)
+        //.await;
+        //println!("CQE result: {socket_result:#?}");
 
-    //    let connect_result = SqeFuture::connect(&owned_sock, addr).await;
-    //    println!("Connect CQE result: {connect_result:#?}");
+        //let owned_sock = socket_result.unwrap();
 
-    //    let msg = "Hello io_uring world!\n";
+        //let host = "127.0.0.1";
+        //let port = 8080;
+        //let addr = SocketAddr::from_str(&format!("{}:{}", host, port)).unwrap();
 
-    //    let send_result = SqeFuture::send(&owned_sock, msg.as_bytes(), 0).await;
-    //    println!("Send CQE result: {send_result:#?}");
+        //let connect_result = SqeFuture::connect(&owned_sock, addr).await;
+        //println!("Connect CQE result: {connect_result:#?}");
 
-    //    let mut tcp = TcpStream::new().await;
-    //    tcp.connect(addr).await.unwrap();
-    //    let write_result = tcp.write(msg.as_bytes()).await;
-    //    println!("TCP Write result: {write_result:#?}");
+        //let msg = "Hello io_uring world!\n";
 
-    //    let listen_host = "127.0.0.1";
-    //    let listen_port = 8081;
-    //    let listen_addr =
-    //        SocketAddr::from_str(&format!("{}:{}", listen_host, listen_port)).unwrap();
+        //let send_result = SqeFuture::send(&owned_sock, msg.as_bytes(), 0).await;
+        //println!("Send CQE result: {send_result:#?}");
 
-    //    let listener = TcpListener::bind(listen_addr).await.unwrap();
-    //    let (new_tcp, _) = listener.accept().await.unwrap();
-    //    let write_result = new_tcp.write(msg.as_bytes()).await;
-    //    println!("TCP Accepted Write result: {write_result:#?}");
+        //let mut tcp = TcpStream::new().await;
+        //tcp.connect(addr).await.unwrap();
+        //let write_result = tcp.write(msg.as_bytes()).await;
+        //println!("TCP Write result: {write_result:#?}");
 
-    //    let mut buf = [0u8; 4096];
-    //    let read_result = new_tcp.read(&mut buf).await.unwrap();
-    //    println!("TCP Accepted Read result: {read_result:#?}");
-    //    println!(
-    //        "TCP Accepted Read contents: {:#?}",
-    //        str::from_utf8(&buf[0..read_result]).unwrap()
-    //    );
-    //});
+        //let listen_host = "127.0.0.1";
+        //let listen_port = 8081;
+        //let listen_addr =
+        //    SocketAddr::from_str(&format!("{}:{}", listen_host, listen_port)).unwrap();
 
-    let cli = Cli::parse();
+        //let listener = TcpListener::bind(listen_addr).await.unwrap();
+        //let (new_tcp, _) = listener.accept().await.unwrap();
+        //let write_result = new_tcp.write(msg.as_bytes()).await;
+        //println!("TCP Accepted Write result: {write_result:#?}");
 
-    if cli.listen {
-        spawn(server(cli.host, cli.port));
-    } else {
-        spawn(client(cli.host, cli.port));
-    }
+        //let mut buf = [0u8; 4096];
+        //let read_result = new_tcp.read(&mut buf).await.unwrap();
+        //println!("TCP Accepted Read result: {read_result:#?}");
+        //println!(
+        //    "TCP Accepted Read contents: {:#?}",
+        //    str::from_utf8(&buf[0..read_result]).unwrap()
+        //);
+    });
+
+    //let cli = Cli::parse();
+
+    //if cli.listen {
+    //    spawn(server(cli.host, cli.port));
+    //} else {
+    //    spawn(client(cli.host, cli.port));
+    //}
 
     Handle::current().with_exec(|exec| {
         exec.run();

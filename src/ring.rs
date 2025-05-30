@@ -7,7 +7,8 @@ use std::time::Duration;
 use liburing_sys::*;
 
 use crate::cqe::StrippedCqe;
-use crate::sqe::SqeFutureShared;
+use crate::handle::*;
+use crate::sqe::*;
 use crate::task::*;
 
 #[derive(Debug, Clone)]
@@ -84,6 +85,36 @@ impl Ring {
             }
         }
     }
+
+    pub fn push_op(&self, op: impl SqeOp) -> SqeFuture {
+        let task_id = get_next_task_id().into_id();
+        let sqe = unsafe {
+            match io_uring_get_sqe(self.inner.as_ptr()).as_mut() {
+                Some(sqe) => {
+                    io_uring_sqe_set_data64(sqe, task_id);
+                    sqe
+                }
+                None => {
+                    self.submit()
+                        .expect("io_uring_submit() failed after NULL SQE");
+                    match io_uring_get_sqe(self.inner.as_ptr()).as_mut() {
+                        Some(sqe) => {
+                            io_uring_sqe_set_data64(sqe, task_id);
+                            sqe
+                        }
+                        None => panic!("Failed to get SQE after io_uring_submit() retry"),
+                    }
+                }
+            }
+        };
+        op.apply(sqe);
+        let fut = SqeFuture::new();
+        self.sqe_map
+            .borrow_mut()
+            .insert(task_id, Rc::clone(&fut.shared));
+        fut
+    }
+
     pub fn submit(&self) -> Result<i32, Error> {
         /*
          * If SQPOLL is used, the return value may report a higher number of submitted entries
@@ -181,4 +212,8 @@ impl Drop for Ring {
     fn drop(&mut self) {
         unsafe { io_uring_queue_exit(self.inner.as_ptr()) }
     }
+}
+
+pub fn push_op(op: impl SqeOp) -> SqeFuture {
+    RingHandle::current().with_ring(|ring| ring.push_op(op))
 }
