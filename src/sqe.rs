@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::ffi::c_void;
 use std::future::Future;
 use std::io::Error;
@@ -10,7 +10,6 @@ use std::task::{Context, Poll, Waker};
 
 use crate::cqe::StrippedCqe;
 use crate::handle::RingHandle;
-use crate::ring::Ring;
 use crate::task::*;
 
 use liburing_sys::*;
@@ -25,7 +24,7 @@ pub struct SqeFuture {
 #[derive(Debug, Clone)]
 pub struct SqeFutureShared {
     pub waker: Option<Waker>,
-    pub cqe: Option<StrippedCqe>,
+    pub cqe: OnceCell<StrippedCqe>,
 }
 
 /*
@@ -45,19 +44,17 @@ impl Future for SqeFuture {
     type Output = StrippedCqe;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut shared = self.shared.borrow_mut();
-        if shared.cqe.is_none() {
+
+        if let Some(cqe) = shared.cqe.get() {
+            Poll::Ready(*cqe)
+        } else {
             if let Some(wake) = &mut shared.waker {
                 wake.clone_from(cx.waker());
             } else {
                 shared.waker = Some(cx.waker().clone());
             }
-            return Poll::Pending;
+            Poll::Pending
         }
-        Poll::Ready(
-            shared
-                .cqe
-                .expect("Future was ready without a CQE result stored!"),
-        )
     }
 }
 
@@ -66,7 +63,7 @@ impl SqeFuture {
         Self {
             shared: Rc::new(RefCell::new(SqeFutureShared {
                 waker: None,
-                cqe: None,
+                cqe: OnceCell::new(),
             })),
         }
     }

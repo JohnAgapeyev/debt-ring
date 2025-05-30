@@ -157,8 +157,11 @@ impl Ring {
                         .remove(&task_id)
                         .expect("CQE user_data doesn't exist in the SQE map!");
 
-                    let mut task_binding = task.borrow_mut();
-                    task_binding.cqe = Some(stripped);
+                    let task_binding = task.borrow_mut();
+                    task_binding
+                        .cqe
+                        .set(stripped)
+                        .expect("Tried to set a CQE result for a completed operation!");
                     task_binding
                         .waker
                         .as_ref()
