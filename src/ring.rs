@@ -19,11 +19,7 @@ pub struct Ring {
 
 impl Ring {
     pub fn new(entries: u32, flags: u32) -> Result<Self, Error> {
-        let cq_buf = RefCell::new({
-            let mut v = Vec::with_capacity(entries as usize);
-            v.resize_with(entries as usize, std::ptr::null_mut);
-            v
-        });
+        let cq_buf = RefCell::new(Vec::with_capacity(entries as usize));
         let sqe_map = RefCell::new(HashMap::with_capacity(entries as usize));
         unsafe {
             let mut ring: io_uring = std::mem::zeroed();
@@ -135,7 +131,7 @@ impl Ring {
         assert!(res >= 0);
 
         let mut cq_buf = self.cq_buf.borrow_mut();
-        cq_buf.clear();
+        assert!(cq_buf.is_empty());
         let capacity = cq_buf.capacity();
         cq_buf.resize_with(capacity, std::ptr::null_mut);
 
@@ -172,6 +168,7 @@ impl Ring {
                 io_uring_cq_advance(self.inner.as_ptr(), nfilled);
             }
         }
+        cq_buf.clear();
 
         Ok(res)
     }
