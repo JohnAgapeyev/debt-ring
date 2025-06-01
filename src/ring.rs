@@ -10,6 +10,7 @@ use crate::cqe::StrippedCqe;
 use crate::handle::*;
 use crate::sqe::*;
 use crate::task::*;
+use crate::SqeOp;
 
 #[derive(Debug, Clone)]
 pub struct Ring {

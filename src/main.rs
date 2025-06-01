@@ -7,6 +7,7 @@ use clap::Parser;
 mod cqe;
 mod executor;
 mod handle;
+mod opcodes;
 mod ring;
 mod sqe;
 mod task;
@@ -14,6 +15,7 @@ mod tcp;
 
 use crate::executor::*;
 use crate::handle::*;
+use crate::opcodes::{SqeOp, nop::Nop};
 use crate::ring::*;
 use crate::sqe::*;
 use crate::tcp::*;
