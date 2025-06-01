@@ -157,13 +157,13 @@ fn main() {
         //);
     });
 
-    //let cli = Cli::parse();
+    let cli = Cli::parse();
 
-    //if cli.listen {
-    //    spawn(server(cli.host, cli.port));
-    //} else {
-    //    spawn(client(cli.host, cli.port));
-    //}
+    if cli.listen {
+        spawn(server(cli.host, cli.port));
+    } else {
+        spawn(client(cli.host, cli.port));
+    }
 
     Handle::current().with_exec(|exec| {
         exec.run();

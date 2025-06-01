@@ -2,6 +2,8 @@ use std::io::Error;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::os::fd::OwnedFd;
 
+use crate::opcodes::Send;
+use crate::ring::push_op;
 use crate::sqe::SqeFuture;
 
 use liburing_sys::SO_REUSEADDR;
@@ -84,7 +86,14 @@ impl TcpStream {
         SqeFuture::connect(&self.sock, addr).await
     }
     pub async fn write(&self, buf: &[u8]) -> Result<usize, Error> {
-        SqeFuture::send(&self.sock, buf, 0).await
+        let send = Send::new(&self.sock, buf, 0);
+        let cqe = push_op(send).await;
+
+        if cqe.res < 0 {
+            return Err(Error::from_raw_os_error(-cqe.res));
+        }
+        assert!(cqe.flags.is_empty());
+        Ok(cqe.res.try_into().unwrap())
     }
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
         SqeFuture::recv(&self.sock, buf, 0).await
